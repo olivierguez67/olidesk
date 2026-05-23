@@ -14,7 +14,7 @@ lazy_static::lazy_static! {
     static ref CURRENT_2FA: Mutex<Option<(TOTPInfo, TOTP)>> = Mutex::new(None);
 }
 
-const ISSUER: &str = "RustDesk";
+const ISSUER: &str = "Olidesk";
 const TAG_LOGIN: &str = "Connection";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ impl TOTPInfo {
         let totp = TOTP::new(
             Algorithm::SHA1,
             self.digits,
-            1,
+            2,
             30,
             self.secret.clone(),
             Some(format!("{} {}", ISSUER, TAG_LOGIN)),
