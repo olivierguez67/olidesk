@@ -7269,7 +7269,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustdesk"
+name = "olidesk"
 version = "1.4.6"
 dependencies = [
  "android-wakelock",
