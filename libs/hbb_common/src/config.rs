@@ -28,7 +28,8 @@ pub use permanent_password::{
 };
 use permanent_password::{
     decode_permanent_password_h1_from_hashed_storage, decrypt_permanent_password_str_or_original,
-    encode_permanent_password_encrypted_storage_from_h1, password_is_empty_or_not_hashed,
+    encode_permanent_password_encrypted_storage_from_h1,
+    local_permanent_password_storage_matches_plain, password_is_empty_or_not_hashed,
     preset_permanent_password_storage_matches_plain, DEFAULT_SALT_LEN, PASSWORD_ENC_VERSION,
 };
 
@@ -1419,6 +1420,19 @@ impl Config {
     pub fn has_local_permanent_password() -> bool {
         let (local_storage, local_salt) = Self::get_local_permanent_password_storage_and_salt();
         local_permanent_password_storage_is_usable_for_auth(&local_storage, &local_salt)
+    }
+
+    pub fn matches_permanent_password_plain(plain: &str) -> bool {
+        let (local_storage, local_salt) = Self::get_local_permanent_password_storage_and_salt();
+        if !local_storage.is_empty() {
+            return local_permanent_password_storage_matches_plain(
+                &local_storage,
+                &local_salt,
+                plain,
+            );
+        }
+        let (preset_storage, preset_salt) = Self::get_preset_password_storage_and_salt();
+        preset_permanent_password_storage_matches_plain(&preset_storage, &preset_salt, plain)
     }
 
     // This shouldn't happen under normal circumstances because the salt

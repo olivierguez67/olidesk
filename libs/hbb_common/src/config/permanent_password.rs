@@ -137,8 +137,7 @@ pub fn decode_preset_password_h1_from_storage(
     decode_password_h1_after_prefix(storage, HBBS_PRESET_PASSWORD_HASH_PREFIX)
 }
 
-#[cfg(test)]
-fn local_permanent_password_storage_matches_plain(storage: &str, salt: &str, input: &str) -> bool {
+pub(super) fn local_permanent_password_storage_matches_plain(storage: &str, salt: &str, input: &str) -> bool {
     if storage.is_empty() || input.is_empty() {
         return false;
     }
