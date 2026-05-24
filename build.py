@@ -292,13 +292,13 @@ def generate_control_file(version):
     control_file_path = "../res/DEBIAN/control"
     system2('/bin/rm -rf %s' % control_file_path)
 
-    content = """Package: rustdesk
+    content = """Package: olidesk
 Section: net
 Priority: optional
 Version: %s
 Architecture: %s
-Maintainer: rustdesk <info@rustdesk.com>
-Homepage: https://rustdesk.com
+Maintainer: olidesk <support@olisys.com>
+Homepage: https://olisys.com
 Depends: libgtk-3-0, libxcb-randr0, libxdo3 | libxdo4, libxfixes3, libxcb-shape0, libxcb-xfixes0, libasound2, libsystemd0, curl, libva2, libva-drm2, libva-x11-2, libgstreamer-plugins-base1.0-0, libpam0g, gstreamer1.0-pipewire%s
 Recommends: libayatana-appindicator3-1
 Description: A remote control software.
@@ -356,11 +356,11 @@ def build_flutter_deb(version, features):
     generate_control_file(version)
     system2('cp -a ../res/DEBIAN/* tmpdeb/DEBIAN/')
     md5_file_folder("tmpdeb/")
-    system2('dpkg-deb -b tmpdeb rustdesk.deb;')
+    system2('dpkg-deb -b tmpdeb olidesk.deb;')
 
     system2('/bin/rm -rf tmpdeb/')
     system2('/bin/rm -rf ../res/DEBIAN/control')
-    os.rename('rustdesk.deb', '../rustdesk-%s.deb' % version)
+    os.rename('olidesk.deb', '../olidesk-%s.deb' % version)
     os.chdir("..")
 
 
@@ -393,11 +393,11 @@ def build_deb_from_folder(version, binary_folder):
     generate_control_file(version)
     system2('cp -a ../res/DEBIAN/* tmpdeb/DEBIAN/')
     md5_file_folder("tmpdeb/")
-    system2('dpkg-deb -b tmpdeb rustdesk.deb;')
+    system2('dpkg-deb -b tmpdeb olidesk.deb;')
 
     system2('/bin/rm -rf tmpdeb/')
     system2('/bin/rm -rf ../res/DEBIAN/control')
-    os.rename('rustdesk.deb', '../rustdesk-%s.deb' % version)
+    os.rename('olidesk.deb', '../olidesk-%s.deb' % version)
     os.chdir("..")
 
 
@@ -627,8 +627,8 @@ def main():
                 system2('mv tmpdeb/usr/bin/rustdesk tmpdeb/usr/share/rustdesk/')
                 system2('cp libsciter-gtk.so tmpdeb/usr/share/rustdesk/')
                 md5_file_folder("tmpdeb/")
-                system2('dpkg-deb -b tmpdeb rustdesk.deb; /bin/rm -rf tmpdeb/')
-                os.rename('rustdesk.deb', 'rustdesk-%s.deb' % version)
+                system2('dpkg-deb -b tmpdeb olidesk.deb; /bin/rm -rf tmpdeb/')
+                os.rename('olidesk.deb', 'olidesk-%s.deb' % version)
 
 
 def md5_file(fn):
