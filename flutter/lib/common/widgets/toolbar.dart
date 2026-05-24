@@ -524,19 +524,22 @@ Future<List<TToggleMenu>> toolbarCursor(
       pi.currentDisplay != kAllDisplayValue &&
       !bind.sessionIsMultiUiSession(sessionId: sessionId)) {
     final option = 'follow-remote-cursor';
-    final value =
-        bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: option);
+    final bool value =
+        bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: option) ??
+            false;
     final showCursorOption = 'show-remote-cursor';
     final showCursorState = ShowRemoteCursorState.find(id);
     final showCursorLockState = ShowRemoteCursorLockState.find(id);
-    final showCursorEnabled = bind.sessionGetToggleOptionSync(
-        sessionId: sessionId, arg: showCursorOption);
+    final bool showCursorEnabled = bind.sessionGetToggleOptionSync(
+            sessionId: sessionId, arg: showCursorOption) ??
+        false;
     showCursorLockState.value = value;
     if (value && !showCursorEnabled) {
       await bind.sessionToggleOption(
           sessionId: sessionId, value: showCursorOption);
       showCursorState.value = bind.sessionGetToggleOptionSync(
-          sessionId: sessionId, arg: showCursorOption);
+              sessionId: sessionId, arg: showCursorOption) ??
+          false;
     }
     v.add(TToggleMenu(
         child: Text(translate('Follow remote cursor')),
@@ -544,14 +547,16 @@ Future<List<TToggleMenu>> toolbarCursor(
         onChanged: (value) async {
           if (value == null) return;
           await bind.sessionToggleOption(sessionId: sessionId, value: option);
-          value = bind.sessionGetToggleOptionSync(
-              sessionId: sessionId, arg: option);
-          showCursorLockState.value = value;
+          final bool newValue =
+              bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: option) ??
+                  false;
+          showCursorLockState.value = newValue;
           if (!showCursorEnabled) {
             await bind.sessionToggleOption(
                 sessionId: sessionId, value: showCursorOption);
             showCursorState.value = bind.sessionGetToggleOptionSync(
-                sessionId: sessionId, arg: showCursorOption);
+                    sessionId: sessionId, arg: showCursorOption) ??
+                false;
           }
         }));
   }
