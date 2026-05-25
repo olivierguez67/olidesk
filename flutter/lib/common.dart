@@ -3707,32 +3707,40 @@ Widget loadPowered(BuildContext context) {
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
-                ?.copyWith(fontSize: 9, decoration: TextDecoration.underline),
+                ?.copyWith(fontSize: 13, decoration: TextDecoration.underline),
           )),
     ),
   ).marginOnly(top: 6);
 }
 
-// max 600 x 120
 Widget loadLogo() {
   return FutureBuilder<ByteData>(
       future: rootBundle.load('assets/logo.png'),
       builder: (BuildContext context, AsyncSnapshot<ByteData> snapshot) {
         if (snapshot.hasData) {
-          final image = Image.asset(
-            'assets/logo.png',
-            fit: BoxFit.contain,
-            errorBuilder: (ctx, error, stackTrace) {
-              return Container();
-            },
-          );
           return Container(
             constraints: BoxConstraints(maxWidth: 600, maxHeight: 120),
-            child: image,
+            child: Image.asset(
+              'assets/logo.png',
+              fit: BoxFit.contain,
+              errorBuilder: (ctx, error, stackTrace) => _olideskWordmark(context),
+            ),
           ).marginOnly(left: 12, right: 12, top: 12);
         }
-        return const Offstage();
+        return _olideskWordmark(context).marginOnly(left: 12, top: 8);
       });
+}
+
+Widget _olideskWordmark(BuildContext context) {
+  return Text(
+    'Olidesk',
+    style: TextStyle(
+      fontSize: 26,
+      fontWeight: FontWeight.bold,
+      color: Theme.of(context).colorScheme.primary,
+      letterSpacing: 1.2,
+    ),
+  );
 }
 
 Widget loadIcon(double size) {
