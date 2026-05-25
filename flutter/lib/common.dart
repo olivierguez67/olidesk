@@ -3734,29 +3734,37 @@ Widget loadLogo() {
 Widget _olideskWordmark(BuildContext context) {
   const brandRed = Color(0xFFCC2200);
   final onSurface = Theme.of(context).colorScheme.onSurface;
-  return RichText(
-    text: TextSpan(
-      children: [
-        TextSpan(
-          text: 'Oli',
-          style: TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.bold,
-            color: onSurface,
-            letterSpacing: 1.2,
-          ),
+  return Row(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      loadIcon(40),
+      const SizedBox(width: 8),
+      RichText(
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: 'Oli',
+              style: TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.bold,
+                color: onSurface,
+                letterSpacing: 1.2,
+              ),
+            ),
+            TextSpan(
+              text: 'desk',
+              style: TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.bold,
+                color: brandRed,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ],
         ),
-        TextSpan(
-          text: 'desk',
-          style: TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.bold,
-            color: brandRed,
-            letterSpacing: 1.2,
-          ),
-        ),
-      ],
-    ),
+      ),
+    ],
   );
 }
 
