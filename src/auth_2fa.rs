@@ -30,7 +30,7 @@ impl TOTPInfo {
         let totp = TOTP::new(
             Algorithm::SHA1,
             self.digits,
-            2,
+            10,
             30,
             self.secret.clone(),
             Some(format!("{} {}", ISSUER, TAG_LOGIN)),

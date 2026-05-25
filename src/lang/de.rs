@@ -579,7 +579,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("2FA code must be 6 digits.", "Der 2FA-Code muss 6 Ziffern haben."),
         ("Multiple Windows sessions found", "Mehrere Windows-Sitzungen gefunden"),
         ("Please select the session you want to connect to", "Bitte wählen Sie die Sitzung, mit der Sie sich verbinden möchten"),
-        ("powered_by_me", "Unterstützt von Olidesk"),
+        ("powered_by_me", "Unterstützt von Olisys"),
         ("outgoing_only_desk_tip", "Dies ist eine benutzerdefinierte Ausgabe von Olidesk.\nSie können eine Verbindung zu anderen Geräten herstellen, aber andere Geräte können keine Verbindung zu Ihrem Gerät herstellen."),
         ("preset_password_warning", "Dies ist eine benutzerdefinierte Ausgabe von Olidesk mit einem voreingestellten Passwort. Jeder, der dieses Passwort kennt, kann die volle Kontrolle über Ihr Gerät erlangen. Wenn Sie dies nicht beabsichtigen, deinstallieren Sie diese Software bitte umgehend."),
         ("Security Alert", "Sicherheitswarnung"),
