@@ -307,7 +307,9 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       menu.add(RemoteMenuEntry.insertLock(sessionId, padding,
           dismissFunc: cancelFunc));
 
-      if (pi.platform == kPeerPlatformLinux || pi.sasEnabled) {
+      if (pi.platform == kPeerPlatformLinux ||
+          pi.platform == kPeerPlatformWindows ||
+          pi.sasEnabled) {
         menu.add(RemoteMenuEntry.insertCtrlAltDel(sessionId, padding,
             dismissFunc: cancelFunc));
       }

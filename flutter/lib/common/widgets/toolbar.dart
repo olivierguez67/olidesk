@@ -231,7 +231,9 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
   if (isDefaultConn &&
       !ffiModel.viewOnly &&
       ffiModel.keyboard &&
-      (pi.platform == kPeerPlatformLinux || pi.sasEnabled)) {
+      (pi.platform == kPeerPlatformLinux ||
+        pi.platform == kPeerPlatformWindows ||
+        pi.sasEnabled)) {
     v.add(
       TTextMenu(
           child: Text('${translate("Insert Ctrl + Alt + Del")}'),
