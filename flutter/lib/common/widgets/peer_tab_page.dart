@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/widgets/address_book.dart';
+import 'package:flutter_hbb/common/widgets/olidesk_address_book.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/my_group.dart';
 import 'package:flutter_hbb/common/widgets/peers_view.dart';
@@ -66,6 +67,7 @@ class _PeerTabPageState extends State<PeerTabPage>
       ),
       ({dynamic hint}) => gFFI.groupModel.pull(force: hint == null),
     ),
+    const _TabEntry(OlideskAddressBook()),
   ];
   RelativeRect? mobileTabContextMenuPos;
 
