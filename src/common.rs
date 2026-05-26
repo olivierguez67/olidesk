@@ -2099,6 +2099,18 @@ fn init_olidesk_defaults() {
     }
 }
 
+#[cfg(feature = "client")]
+fn apply_client_build_settings() {
+    let mut hard = config::HARD_SETTINGS.write().unwrap();
+    hard.insert("conn-type".to_owned(), "incoming".to_owned());
+    hard.insert("disable-settings".to_owned(), "Y".to_owned());
+    hard.insert("disable-ab".to_owned(), "Y".to_owned());
+    hard.insert("disable-account".to_owned(), "Y".to_owned());
+    hard.insert("hide-server-settings".to_owned(), "Y".to_owned());
+    hard.insert("hide-network-settings".to_owned(), "Y".to_owned());
+    hard.insert("hide-security-settings".to_owned(), "Y".to_owned());
+}
+
 pub fn load_custom_client() {
     init_olidesk_defaults();
     #[cfg(debug_assertions)]
@@ -2120,6 +2132,8 @@ pub fn load_custom_client() {
         };
         read_custom_client(&data.trim());
     }
+    #[cfg(feature = "client")]
+    apply_client_build_settings();
 }
 
 fn read_custom_client_advanced_settings(

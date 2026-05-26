@@ -2997,6 +2997,7 @@ String getWindowName({WindowType? overrideType}) {
   final name = bind.mainGetAppNameSync();
   switch (overrideType ?? kWindowType) {
     case WindowType.Main:
+      if (bind.isIncomingOnly()) return 'Olidesk Support';
       return name;
     case WindowType.FileTransfer:
       return "File Transfer - $name";
