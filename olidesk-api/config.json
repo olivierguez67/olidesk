@@ -1,0 +1,6 @@
+{
+  "token": "CHANGE_ME",
+  "host": "0.0.0.0",
+  "port": 8443,
+  "db_path": "/data/address_book.sqlite"
+}
