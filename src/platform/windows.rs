@@ -948,21 +948,21 @@ pub fn send_sas() {
                                       */
                     if value != 1 && value != 3 {
                         original_value = Some(value);
-                        log::info!("SoftwareSASGeneration is {}, setting to 1", value);
-                        // Set to 1 for SendSAS to work
-                        if let Err(e) = policy_key.set_value("SoftwareSASGeneration", &1u32) {
+                        log::info!("SoftwareSASGeneration is {}, setting to 3", value);
+                        // 3 = services AND ease-of-access apps; maximises compatibility
+                        if let Err(e) = policy_key.set_value("SoftwareSASGeneration", &3u32) {
                             log::error!("Failed to set SoftwareSASGeneration: {}", e);
                         }
                     }
                 }
                 Err(e) => {
                     log::info!(
-                        "SoftwareSASGeneration not found or error reading: {}, setting to 1",
+                        "SoftwareSASGeneration not found or error reading: {}, setting to 3",
                         e
                     );
                     original_value = Some(0); // Mark that we need to restore (delete) it
-                                              // Create and set to 1
-                    if let Err(e) = policy_key.set_value("SoftwareSASGeneration", &1u32) {
+                                              // Create and set to 3
+                    if let Err(e) = policy_key.set_value("SoftwareSASGeneration", &3u32) {
                         log::error!("Failed to set SoftwareSASGeneration: {}", e);
                     }
                 }

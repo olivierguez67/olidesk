@@ -2203,11 +2203,19 @@ async fn lock_screen_2() {
 #[tokio::main(flavor = "current_thread")]
 async fn send_sas() -> ResultType<()> {
     if crate::platform::is_physical_console_session().unwrap_or(true) {
-        let mut stream = crate::ipc::connect(1000, crate::POSTFIX_SERVICE).await?;
-        timeout(1000, stream.send(&crate::ipc::Data::SAS)).await??;
-    } else {
-        crate::platform::send_sas();
-    };
+        // Prefer delegating to the SYSTEM service so SendSAS has the required privileges.
+        if let Ok(mut stream) = crate::ipc::connect(1000, crate::POSTFIX_SERVICE).await {
+            if timeout(1000, stream.send(&crate::ipc::Data::SAS))
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        // Service not reachable (e.g. portable mode); try directly.
+        log::warn!("send_sas: service IPC unavailable, attempting direct SendSAS");
+    }
+    crate::platform::send_sas();
     Ok(())
 }
 
