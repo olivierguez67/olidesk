@@ -67,7 +67,7 @@ class _PeerTabPageState extends State<PeerTabPage>
       ),
       ({dynamic hint}) => gFFI.groupModel.pull(force: hint == null),
     ),
-    const _TabEntry(OlideskAddressBook()),
+    _TabEntry(const OlideskAddressBook()),
   ];
   RelativeRect? mobileTabContextMenuPos;
 
