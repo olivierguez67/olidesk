@@ -2109,6 +2109,7 @@ fn apply_client_build_settings() {
     hard.insert("hide-server-settings".to_owned(), "Y".to_owned());
     hard.insert("hide-network-settings".to_owned(), "Y".to_owned());
     hard.insert("hide-security-settings".to_owned(), "Y".to_owned());
+    hard.insert("verification-method".to_owned(), "use-permanent-password".to_owned());
 }
 
 pub fn load_custom_client() {

@@ -274,5 +274,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("keep-awake-during-incoming-sessions-label", "Keep screen awake during incoming sessions"),
         ("password-hidden-tip", "Permanent password is set (hidden)."),
         ("preset-password-in-use-tip", "Preset password is currently in use."),
+        ("Security Setup Required", "Security Setup Required"),
+        ("Set a permanent password", "Set a permanent password"),
+        ("Enable two-factor authentication", "Enable two-factor authentication"),
+        ("Setup 2FA", "Setup 2FA"),
     ].iter().cloned().collect();
 }

@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
 import 'package:flutter_hbb/common/widgets/custom_password.dart';
+import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
@@ -53,6 +54,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   final RxBool _editHover = false.obs;
   final RxBool _block = false.obs;
+  bool _clientPwdSet = false;
+  bool _clientTwoFaSet = false;
 
   final GlobalKey _childKey = GlobalKey();
 
@@ -359,7 +362,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                           ),
                           onHover: (value) => refreshHover.value = value,
                         ).marginOnly(right: 8, top: 4),
-                      if (!bind.isDisableSettings())
+                      if (!bind.isDisableSettings() || bind.isIncomingOnly())
                         InkWell(
                           child: Tooltip(
                             message: translate('Change Password'),
@@ -373,8 +376,18 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                               ).marginOnly(right: 8, top: 4),
                             ),
                           ),
-                          onTap: () => DesktopSettingPage.switch2page(
-                              SettingsTabKey.safety),
+                          onTap: () {
+                            if (bind.isIncomingOnly()) {
+                              setPasswordDialog(notEmptyCallback: () {
+                                setState(() {
+                                  _clientPwdSet = true;
+                                });
+                              });
+                            } else {
+                              DesktopSettingPage.switch2page(
+                                  SettingsTabKey.safety);
+                            }
+                          },
                           onHover: (value) => editHover.value = value,
                         ),
                     ],
@@ -556,6 +569,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       }
     }
     if (bind.isIncomingOnly()) {
+      if (!_clientPwdSet || !_clientTwoFaSet) {
+        return _buildClientSecuritySetup();
+      }
       return Align(
         alignment: Alignment.centerRight,
         child: OutlinedButton(
@@ -571,6 +587,109 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       ).marginAll(14);
     }
     return Container();
+  }
+
+  Widget _buildClientSecuritySetup() {
+    final step1Done = _clientPwdSet;
+    final step2Done = _clientTwoFaSet;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(0, 20, 0, 0),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            Color.fromARGB(255, 226, 66, 188),
+            Color.fromARGB(255, 244, 114, 124),
+          ],
+        ),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            translate('Security Setup Required'),
+            style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Icon(
+                step1Done ? Icons.check_circle : Icons.radio_button_unchecked,
+                color: Colors.white,
+                size: 16,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  translate('Set a permanent password'),
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(step1Done ? 0.6 : 1.0),
+                      fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          if (!step1Done)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: ElevatedButton(
+                onPressed: () => setPasswordDialog(notEmptyCallback: () {
+                  setState(() {
+                    _clientPwdSet = true;
+                  });
+                }),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color.fromARGB(255, 226, 66, 188)),
+                child: Text(translate('Set Password')),
+              ),
+            ),
+          if (step1Done) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  step2Done
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
+                  color: Colors.white,
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    translate('Enable two-factor authentication'),
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(step2Done ? 0.6 : 1.0),
+                        fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+            if (!step2Done)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: ElevatedButton(
+                  onPressed: () => change2fa(callback: () {
+                    setState(() {
+                      _clientTwoFaSet = true;
+                    });
+                  }),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: const Color.fromARGB(255, 226, 66, 188)),
+                  child: Text(translate('Setup 2FA')),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget buildInstallCard(String title, String content, String btnText,
@@ -697,6 +816,17 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   @override
   void initState() {
     super.initState();
+    if (bind.isIncomingOnly()) {
+      Future.microtask(() async {
+        final pwdSet =
+            (await bind.mainGetCommon(key: "permanent-password-set")) == "true";
+        final twoFaSet = bind.mainHasValid2FaSync();
+        setState(() {
+          _clientPwdSet = pwdSet;
+          _clientTwoFaSet = twoFaSet;
+        });
+      });
+    }
     _updateTimer = periodic_immediate(const Duration(seconds: 1), () async {
       await gFFI.serverModel.fetchID();
       final error = await bind.mainGetError();
@@ -708,6 +838,16 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       if (v != svcStopped.value) {
         svcStopped.value = v;
         setState(() {});
+      }
+      if (bind.isIncomingOnly()) {
+        final pwdSet =
+            (await bind.mainGetCommon(key: "permanent-password-set")) == "true";
+        final twoFaSet = bind.mainHasValid2FaSync();
+        if (pwdSet != _clientPwdSet || twoFaSet != _clientTwoFaSet) {
+          _clientPwdSet = pwdSet;
+          _clientTwoFaSet = twoFaSet;
+          setState(() {});
+        }
       }
       if (watchIsCanScreenRecording) {
         if (bind.mainIsCanScreenRecording(prompt: false)) {
