@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -171,7 +172,10 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   Future<void> _fetchGroups() async {
     try {
       final resp = await http_svc
-          .get(Uri.parse('$_apiUrl/api/groups'), headers: _headers);
+          .get(Uri.parse('$_apiUrl/api/groups'), headers: _headers)
+          .timeout(const Duration(seconds: 10),
+              onTimeout: () =>
+                  throw TimeoutException('Request timed out after 10 s'));
       _handleStatus(resp.statusCode);
       final data = jsonDecode(resp.body) as List;
       _groups.value =
@@ -194,8 +198,11 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
       final url = groupId != null
           ? '$_apiUrl/api/clients?group_id=$groupId'
           : '$_apiUrl/api/clients';
-      final resp =
-          await http_svc.get(Uri.parse(url), headers: _headers);
+      final resp = await http_svc
+          .get(Uri.parse(url), headers: _headers)
+          .timeout(const Duration(seconds: 10),
+              onTimeout: () =>
+                  throw TimeoutException('Request timed out after 10 s'));
       _handleStatus(resp.statusCode);
       final data = jsonDecode(resp.body) as List;
       _clients.value = data
@@ -230,6 +237,9 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
 
   String _friendlyError(Object e) {
     final msg = e.toString();
+    if (e is TimeoutException || msg.contains('timed out')) {
+      return 'Connection timed out.\nCheck that the API server is running and reachable.';
+    }
     if (msg.contains('Connection refused') ||
         msg.contains('SocketException') ||
         msg.contains('Failed host')) {
@@ -556,7 +566,10 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   Widget _buildClientPanel(BuildContext context) {
     return Obx(() {
       final clients = _visibleClients;
-      if (clients.isEmpty && !_loading.value) {
+      if (_loading.value && clients.isEmpty) {
+        return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+      }
+      if (clients.isEmpty) {
         return Center(
           child: Text(
             translate('No clients'),
