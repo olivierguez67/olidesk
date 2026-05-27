@@ -258,7 +258,7 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
         Expanded(
           child: Obx(() {
             if (!_isConfigured) return _buildUnconfigured(context);
-            if (_error.value.isNotEmpty && _clients.isEmpty) {
+            if (_error.value.isNotEmpty) {
               return _buildError(context);
             }
             return Row(
@@ -303,13 +303,25 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
             _toolbarTextBtn(
               icon: Icons.create_new_folder_outlined,
               label: 'Add Group',
-              onTap: () => _showAddGroupDialog(context),
+              onTap: () {
+                if (!_isConfigured) {
+                  _showSettingsDialog(context);
+                } else {
+                  _showAddGroupDialog(context);
+                }
+              },
             ),
             const SizedBox(width: 4),
             _toolbarTextBtn(
               icon: Icons.person_add_alt_1_outlined,
               label: 'Add Client',
-              onTap: () => _showAddClientDialog(context),
+              onTap: () {
+                if (!_isConfigured) {
+                  _showSettingsDialog(context);
+                } else {
+                  _showAddClientDialog(context);
+                }
+              },
             ),
             const Spacer(),
             _toolbarBtn(
@@ -365,25 +377,32 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   // ---------------------------------------------------------------------------
 
   Widget _buildUnconfigured(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
-          const SizedBox(height: 12),
-          const Text('Address book not configured.',
-              style: TextStyle(fontSize: 14)),
-          const SizedBox(height: 4),
-          Text('Set the API URL and token to get started.',
-              style: TextStyle(
-                  fontSize: 12, color: Theme.of(context).hintColor)),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.settings_outlined, size: 16),
-            label: const Text('Configure'),
-            onPressed: () => _showSettingsDialog(context),
-          ),
-        ],
+    return Container(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.settings_ethernet,
+                size: 52, color: Theme.of(context).hintColor),
+            const SizedBox(height: 14),
+            Text('Address book not configured.',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Text('Click Configure to enter your API URL and bearer token.',
+                style: TextStyle(
+                    fontSize: 12, color: Theme.of(context).hintColor)),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.settings_outlined, size: 16),
+              label: const Text('Configure'),
+              onPressed: () => _showSettingsDialog(context),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -834,12 +853,16 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                 final name = nameCtrl.text.trim();
                 if (name.isEmpty) return;
                 Navigator.pop(ctx);
-                await http_svc.post(
-                  Uri.parse('$_apiUrl/api/groups'),
-                  headers: _headers,
-                  body: jsonEncode({'name': name, 'parent_id': parentId}),
-                );
-                await _fetchGroups();
+                try {
+                  await http_svc.post(
+                    Uri.parse('$_apiUrl/api/groups'),
+                    headers: _headers,
+                    body: jsonEncode({'name': name, 'parent_id': parentId}),
+                  );
+                  await _fetchGroups();
+                } catch (e) {
+                  _error.value = _friendlyError(e);
+                }
               },
               child: const Text('Add'),
             ),
@@ -960,21 +983,25 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                 final name = nameCtrl.text.trim();
                 if (id.isEmpty || name.isEmpty) return;
                 Navigator.pop(ctx);
-                await http_svc.post(
-                  Uri.parse('$_apiUrl/api/clients'),
-                  headers: _headers,
-                  body: jsonEncode({
-                    'olidesk_id': id,
-                    'name': name,
-                    'group_id': groupId,
-                    if (hostnameCtrl.text.trim().isNotEmpty)
-                      'hostname': hostnameCtrl.text.trim(),
-                    if (platform != null) 'platform': platform,
-                    if (notesCtrl.text.trim().isNotEmpty)
-                      'notes': notesCtrl.text.trim(),
-                  }),
-                );
-                await _fetchClients(groupId: _selectedGroupId.value);
+                try {
+                  await http_svc.post(
+                    Uri.parse('$_apiUrl/api/clients'),
+                    headers: _headers,
+                    body: jsonEncode({
+                      'olidesk_id': id,
+                      'name': name,
+                      'group_id': groupId,
+                      if (hostnameCtrl.text.trim().isNotEmpty)
+                        'hostname': hostnameCtrl.text.trim(),
+                      if (platform != null) 'platform': platform,
+                      if (notesCtrl.text.trim().isNotEmpty)
+                        'notes': notesCtrl.text.trim(),
+                    }),
+                  );
+                  await _fetchClients(groupId: _selectedGroupId.value);
+                } catch (e) {
+                  _error.value = _friendlyError(e);
+                }
               },
               child: const Text('Add'),
             ),
