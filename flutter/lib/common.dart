@@ -3733,34 +3733,30 @@ Widget loadLogo() {
 }
 
 Widget _olideskWordmark(BuildContext context) {
-  const brandRed = Color(0xFFCC2200);
-  final onSurface = Theme.of(context).colorScheme.onSurface;
+  const brandOrange = Color(0xFFEF4A1C);
+  const wordStyle = TextStyle(
+    fontFamily: 'Stratos',
+    fontSize: 26,
+    fontWeight: FontWeight.w600,
+    letterSpacing: 0.4,
+    height: 1.0,
+  );
   return Row(
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.center,
     children: [
-      loadIcon(40),
-      const SizedBox(width: 8),
+      loadIcon(38),
+      const SizedBox(width: 10),
       RichText(
         text: TextSpan(
           children: [
             TextSpan(
-              text: 'Oli',
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-                color: onSurface,
-                letterSpacing: 1.2,
-              ),
+              text: 'oli',
+              style: wordStyle.copyWith(color: Colors.black),
             ),
             TextSpan(
               text: 'desk',
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-                color: brandRed,
-                letterSpacing: 1.2,
-              ),
+              style: wordStyle.copyWith(color: brandOrange),
             ),
           ],
         ),
