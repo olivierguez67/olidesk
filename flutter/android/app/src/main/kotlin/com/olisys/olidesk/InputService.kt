@@ -1,4 +1,4 @@
-package com.carriez.flutter_hbb
+package com.olisys.olidesk
 
 /**
  * Handle remote input and dispatch android gesture
