@@ -19,6 +19,7 @@ import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:get/get_rx/src/rx_workers/utils/debouncer.dart';
 import 'package:provider/provider.dart';
 import 'package:uni_links/uni_links.dart';
@@ -3734,10 +3735,9 @@ Widget loadLogo() {
 
 Widget _olideskWordmark(BuildContext context) {
   const brandOrange = Color(0xFFEF4A1C);
-  const wordStyle = TextStyle(
-    fontFamily: 'Stratos',
+  final wordStyle = GoogleFonts.montserrat(
     fontSize: 26,
-    fontWeight: FontWeight.w600,
+    fontWeight: FontWeight.bold,
     letterSpacing: 0.4,
     height: 1.0,
   );
