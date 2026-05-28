@@ -220,6 +220,17 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
     await _fetchClients(groupId: _selectedGroupId.value);
   }
 
+  Future<void> _apiDeleteGroup(int id) async {
+    await http_svc
+        .delete(Uri.parse('$_apiUrl/api/groups/$id'), headers: _headers)
+        .timeout(const Duration(seconds: 10),
+            onTimeout: () =>
+                throw TimeoutException('Request timed out after 10 s'));
+    if (_selectedGroupId.value == id) _selectedGroupId.value = null;
+    await _fetchGroups();
+    await _fetchClients(groupId: _selectedGroupId.value);
+  }
+
   Future<void> _apiMoveClient(int id, int? groupId) async {
     await http_svc.post(
       Uri.parse('$_apiUrl/api/clients/$id/move'),
@@ -482,34 +493,89 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
     final g = fg.group;
     final hasChildren = g.children.isNotEmpty;
     final isExpanded = _expanded.contains(g.id);
-    return _buildGroupTile(
-      context,
-      icon: hasChildren
-          ? (isExpanded ? Icons.folder_open : Icons.folder)
-          : Icons.folder_outlined,
-      iconColor: MyTheme.accent,
-      label: g.name,
-      isSelected: _selectedGroupId.value == g.id,
-      depth: fg.depth,
-      trailing: hasChildren
-          ? Icon(
-              isExpanded ? Icons.expand_less : Icons.expand_more,
-              size: 14,
-              color: Theme.of(context).hintColor,
-            )
-          : null,
-      onTap: () {
-        if (hasChildren) {
-          if (_expanded.contains(g.id)) {
-            _expanded.remove(g.id);
-          } else {
-            _expanded.add(g.id);
-          }
-          _treeVer.value++;
+    final hover = false.obs;
+
+    void doTap() {
+      if (hasChildren) {
+        if (_expanded.contains(g.id)) {
+          _expanded.remove(g.id);
+        } else {
+          _expanded.add(g.id);
         }
-        _selectedGroupId.value = g.id;
-        _fetchClients(groupId: g.id);
+        _treeVer.value++;
+      }
+      _selectedGroupId.value = g.id;
+      _fetchClients(groupId: g.id);
+    }
+
+    void showGroupMenu() {
+      final RenderBox box = context.findRenderObject() as RenderBox;
+      final offset = box.localToGlobal(Offset.zero);
+      showMenu<String>(
+        context: context,
+        position: RelativeRect.fromLTRB(
+            _menuPos.left, _menuPos.top, _menuPos.right, _menuPos.bottom),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        items: [
+          PopupMenuItem(
+            value: 'delete',
+            child: _menuItem(Icons.delete_outline, translate('Delete'),
+                color: Colors.redAccent),
+          ),
+        ],
+        elevation: 6,
+      ).then((action) {
+        if (!mounted || action == null) return;
+        if (action == 'delete') _confirmDeleteGroup(context, g);
+      });
+    }
+
+    return Listener(
+      onPointerDown: (e) {
+        final x = e.position.dx;
+        final y = e.position.dy;
+        _menuPos = RelativeRect.fromLTRB(x, y, x, y);
       },
+      child: MouseRegion(
+        onEnter: (_) => hover.value = true,
+        onExit: (_) => hover.value = false,
+        child: GestureDetector(
+          onSecondaryTap: showGroupMenu,
+          child: _buildGroupTile(
+            context,
+            icon: hasChildren
+                ? (isExpanded ? Icons.folder_open : Icons.folder)
+                : Icons.folder_outlined,
+            iconColor: MyTheme.accent,
+            label: g.name,
+            isSelected: _selectedGroupId.value == g.id,
+            depth: fg.depth,
+            trailing: Obx(() => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (hasChildren)
+                      Icon(
+                        isExpanded ? Icons.expand_less : Icons.expand_more,
+                        size: 14,
+                        color: Theme.of(context).hintColor,
+                      ),
+                    if (hover.value)
+                      InkWell(
+                        onTap: showGroupMenu,
+                        borderRadius: BorderRadius.circular(4),
+                        child: Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(Icons.more_vert,
+                              size: 14,
+                              color: Theme.of(context).hintColor),
+                        ),
+                      ),
+                  ],
+                )),
+            onTap: doTap,
+          ),
+        ),
+      ),
     );
   }
 
@@ -737,6 +803,35 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
               Navigator.pop(ctx);
               try {
                 await _apiDeleteClient(client.id);
+              } catch (e) {
+                _error.value = _friendlyError(e);
+              }
+            },
+            child: Text(translate('Delete')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteGroup(BuildContext context, _AbGroup group) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(translate('Delete')),
+        content: Text(
+            'Delete group "${group.name}"? Clients in this group will be unassigned.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(translate('Cancel')),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                await _apiDeleteGroup(group.id);
               } catch (e) {
                 _error.value = _friendlyError(e);
               }
