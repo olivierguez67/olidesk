@@ -73,6 +73,9 @@ pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 lazy_static::lazy_static! {
     static ref LOGIN_FAILURES: [Arc::<Mutex<HashMap<String, (i32, i32, i32)>>>; 2] = Default::default();
     static ref SESSIONS: Arc::<Mutex<HashMap<SessionKey, Session>>> = Default::default();
+    // Remembers peers that recently passed 2FA, so a dropped connection does not force a new code.
+    // In memory only: cleared whenever the service restarts.
+    static ref TFA_GRACE: Arc::<Mutex<HashMap<TfaGraceKey, Arc<Mutex<Instant>>>>> = Default::default();
     static ref ALIVE_CONNS: Arc::<Mutex<Vec<i32>>> = Default::default();
     pub static ref AUTHED_CONNS: Arc::<Mutex<Vec<AuthedConn>>> = Default::default();
     pub static ref CONTROL_PERMISSIONS_ARRAY: Arc::<Mutex<Vec<(i32, ControlPermissions)>>> = Default::default();
@@ -213,6 +216,15 @@ pub struct SessionKey {
     session_id: u64,
 }
 
+// Identifies the controlling peer for the 2FA grace period. Unlike `SessionKey` it does not
+// include `session_id`, so closing the remote window and connecting again still matches.
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct TfaGraceKey {
+    peer_id: String,
+    name: String,
+    platform: String,
+}
+
 #[derive(Clone, Debug)]
 struct Session {
     last_recv_time: Arc<Mutex<Instant>>,
@@ -310,6 +322,7 @@ pub struct Connection {
     lr: LoginRequest,
     peer_argb: u32,
     session_last_recv_time: Option<Arc<Mutex<Instant>>>,
+    tfa_grace_last_recv_time: Option<Arc<Mutex<Instant>>>,
     chat_unanswered: bool,
     file_transferred: bool,
     #[cfg(windows)]
@@ -494,6 +507,7 @@ impl Connection {
             lr: Default::default(),
             peer_argb: 0u32,
             session_last_recv_time: None,
+            tfa_grace_last_recv_time: None,
             chat_unanswered: false,
             file_transferred: false,
             #[cfg(windows)]
@@ -875,6 +889,7 @@ impl Connection {
                             Ok(bytes) => {
                                 last_recv_time = Instant::now();
                                 conn.session_last_recv_time.as_mut().map(|t| *t.lock().unwrap() = Instant::now());
+                                conn.tfa_grace_last_recv_time.as_mut().map(|t| *t.lock().unwrap() = Instant::now());
                                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
                                     if !conn.on_message(msg_in).await {
                                         break;
@@ -1499,7 +1514,10 @@ impl Connection {
         if self.authorized {
             return true;
         }
-        if self.require_2fa.is_some() && !self.is_recent_session(true) && !self.from_switch {
+        // Whether this host has 2FA configured at all. Still `Some` when the gate below is
+        // skipped, and only cleared once a code has been accepted.
+        let need_2fa = self.require_2fa.is_some();
+        if need_2fa && !self.is_recent_session(true) && !self.is_recent_tfa() && !self.from_switch {
             self.require_2fa.as_ref().map(|totp| {
                 let bot = crate::auth_2fa::TelegramBot::get();
                 let bot = match bot {
@@ -1538,6 +1556,11 @@ impl Connection {
             return false;
         }
         self.authorized = true;
+        if need_2fa {
+            // Passed the gate above without entering a code, so keep the grace period running
+            // from this connection's activity instead of letting it expire mid-session.
+            self.touch_tfa_grace();
+        }
         let (conn_type, auth_conn_type) = if self.file_transfer.is_some() {
             (1, AuthConnType::FileTransfer)
         } else if self.port_forward_socket.is_some() {
@@ -2228,6 +2251,65 @@ impl Connection {
         false
     }
 
+    // How long after the last activity of a 2FA-verified peer we skip asking for a new code.
+    // Set the local option "2fa-grace-minutes" to change it; "0" restores the old behavior of
+    // always asking. Capped at a day so a typo cannot disable 2FA indefinitely.
+    fn tfa_grace_timeout() -> Duration {
+        const DEFAULT_MINUTES: u64 = 10;
+        const MAX_MINUTES: u64 = 24 * 60;
+        let minutes = Config::get_option("2fa-grace-minutes")
+            .parse::<u64>()
+            .unwrap_or(DEFAULT_MINUTES);
+        Duration::from_secs(minutes.min(MAX_MINUTES) * 60)
+    }
+
+    #[inline]
+    fn tfa_grace_key(&self) -> TfaGraceKey {
+        TfaGraceKey {
+            peer_id: self.lr.my_id.clone(),
+            name: self.lr.my_name.clone(),
+            platform: self.lr.my_platform.clone(),
+        }
+    }
+
+    // Whether this peer passed 2FA recently enough that we can skip the code.
+    // The password has already been validated by the time this is reached.
+    fn is_recent_tfa(&self) -> bool {
+        let timeout = Self::tfa_grace_timeout();
+        if timeout.is_zero() {
+            TFA_GRACE.lock().unwrap().clear();
+            return false;
+        }
+        TFA_GRACE
+            .lock()
+            .unwrap()
+            .retain(|_, t| t.lock().unwrap().elapsed() < timeout);
+        if self.lr.password.is_empty() {
+            return false;
+        }
+        let is_recent = TFA_GRACE.lock().unwrap().contains_key(&self.tfa_grace_key());
+        if is_recent {
+            log::info!("2FA skipped, within grace period");
+        }
+        is_recent
+    }
+
+    // Starts or extends the grace period, and hands this connection the shared clock so the
+    // period is measured from the peer's last activity rather than from the code entry.
+    fn touch_tfa_grace(&mut self) {
+        if Self::tfa_grace_timeout().is_zero() {
+            return;
+        }
+        let last_recv_time = TFA_GRACE
+            .lock()
+            .unwrap()
+            .entry(self.tfa_grace_key())
+            .or_insert_with(|| Arc::new(Mutex::new(Instant::now())))
+            .clone();
+        *last_recv_time.lock().unwrap() = Instant::now();
+        self.tfa_grace_last_recv_time = Some(last_recv_time);
+    }
+
     #[inline]
     pub fn is_permission_enabled_locally(enable_prefix_option: &str) -> bool {
         #[cfg(feature = "flutter")]
@@ -2607,6 +2689,7 @@ impl Connection {
                         self.update_failure(failure, true, 1);
                         self.require_2fa.take();
                         raii::AuthedConnID::set_session_2fa(self.session_key());
+                        self.touch_tfa_grace();
                         if !self.send_logon_response_and_keep_alive().await {
                             return false;
                         }
@@ -4648,6 +4731,10 @@ impl Connection {
         msg_out.set_misc(misc);
         self.send(msg_out).await;
         raii::AuthedConnID::check_remove_session(self.inner.id(), self.session_key());
+        // Deliberate termination (operator disconnect, web console, service stop, idle timeout):
+        // end the grace period so the peer must enter a fresh code.
+        TFA_GRACE.lock().unwrap().remove(&self.tfa_grace_key());
+        self.tfa_grace_last_recv_time.take();
     }
 
     async fn handle_read_job_init_result(
