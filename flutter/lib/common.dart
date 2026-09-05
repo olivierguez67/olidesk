@@ -30,6 +30,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
 
 import '../consts.dart';
+import 'common/widgets/android_updater.dart';
 import 'common/widgets/overlay.dart';
 import 'mobile/pages/file_manager_page.dart';
 import 'mobile/pages/remote_page.dart';
@@ -4005,15 +4006,29 @@ void earlyAssert() {
 
 void checkUpdate() {
   if (!isWeb) {
-    if (!bind.isCustomClient()) {
-      platformFFI.registerEventHandler(
-          kCheckSoftwareUpdateFinish, kCheckSoftwareUpdateFinish,
-          (Map<String, dynamic> evt) async {
-        if (evt['url'] is String) {
-          stateGlobal.updateUrl.value = evt['url'];
+    platformFFI.registerEventHandler(
+        kCheckSoftwareUpdateFinish, kCheckSoftwareUpdateFinish,
+        (Map<String, dynamic> evt) async {
+      if (evt['url'] is String) {
+        final url = evt['url'] as String;
+        stateGlobal.updateUrl.value = url;
+        // Windows silently downloads and installs the update itself
+        // (`src/updater.rs`); Android has no such native path, so download
+        // the matching APK here and hand it to the system installer.
+        if (isAndroid && url.isNotEmpty) {
+          unawaited(downloadAndInstallAndroidUpdate(url));
         }
-      });
-      Timer(const Duration(seconds: 1), () async {
+      }
+    });
+    Timer(const Duration(seconds: 1), () async {
+      bind.mainGetSoftwareUpdateUrl();
+    });
+    // Desktop already re-checks every 24h in the background
+    // (`src/updater.rs::start_auto_update_check_`), which only ever runs on
+    // Windows. Mobile has no background process, so re-check periodically
+    // while the app is open.
+    if (isAndroid) {
+      Timer.periodic(const Duration(hours: 24), (_) {
         bind.mainGetSoftwareUpdateUrl();
       });
     }

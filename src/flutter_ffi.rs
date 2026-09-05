@@ -2837,15 +2837,26 @@ pub fn main_get_common(key: String) -> String {
                 }
             }
         } else if key.starts_with("download-file-") {
+            // The GitHub tag (`v1.2.3`) is passed in; strip the leading `v` to match
+            // the version number embedded in the release asset filenames.
             let _version = key.replace("download-file-", "");
+            let _version = _version.trim_start_matches('v');
             #[cfg(target_os = "windows")]
-            return match (
-                crate::platform::windows::is_msi_installed(),
-                crate::common::is_custom_client(),
-            ) {
-                (Ok(true), false) => format!("rustdesk-{_version}-x86_64.msi"),
-                (Ok(true), true) | (Ok(false), _) => format!("rustdesk-{_version}-x86_64.exe"),
-                (Err(e), _) => {
+            return match crate::platform::windows::is_msi_installed() {
+                Ok(is_msi) => {
+                    if cfg!(feature = "client") {
+                        if is_msi {
+                            format!("olidesk-client-{_version}-x86_64.msi")
+                        } else {
+                            format!("olidesk-client-{_version}-x86_64.exe")
+                        }
+                    } else if is_msi {
+                        format!("olidesk-{_version}-x86_64.msi")
+                    } else {
+                        format!("rustdesk-{_version}-x86_64.exe")
+                    }
+                }
+                Err(e) => {
                     log::error!("Failed to check if is msi: {}", e);
                     format!("error:update-failed-check-msi-tip")
                 }
@@ -2860,7 +2871,19 @@ pub fn main_get_common(key: String) -> String {
                     "error:unsupported".to_owned()
                 };
             }
-            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            #[cfg(target_os = "android")]
+            {
+                return if cfg!(feature = "client") {
+                    format!("olidesk-client-{_version}-universal.apk")
+                } else {
+                    format!("rustdesk-{_version}-universal.apk")
+                };
+            }
+            #[cfg(not(any(
+                target_os = "windows",
+                target_os = "macos",
+                target_os = "android"
+            )))]
             {
                 "error:unsupported".to_owned()
             }

@@ -119,9 +119,16 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
 
 fn check_update(manually: bool) -> ResultType<()> {
     #[cfg(target_os = "windows")]
-    let update_msi = crate::platform::is_msi_installed()? && !crate::is_custom_client();
-    if !(manually || config::Config::get_bool_option(config::keys::OPTION_ALLOW_AUTO_UPDATE)) {
-        return Ok(());
+    let update_msi = crate::platform::is_msi_installed()?;
+    if !manually {
+        // Auto-update is opt-out (defaults to on) for Olidesk: only skip it if the
+        // user has explicitly turned off "Auto update" in Settings.
+        let opt = config::Config::get_option(config::keys::OPTION_ALLOW_AUTO_UPDATE);
+        let auto_update_allowed =
+            opt.is_empty() || config::option2bool(config::keys::OPTION_ALLOW_AUTO_UPDATE, &opt);
+        if !auto_update_allowed {
+            return Ok(());
+        }
     }
     if do_check_software_update().is_err() {
         // ignore
@@ -133,17 +140,23 @@ fn check_update(manually: bool) -> ResultType<()> {
         log::debug!("No update available.");
     } else {
         let download_url = update_url.replace("tag", "download");
-        let version = download_url.split('/').last().unwrap_or_default();
+        let tag = download_url.split('/').last().unwrap_or_default();
+        let version = tag.trim_start_matches('v');
+        // Admin and client flavors publish distinctly-named assets into the same
+        // GitHub release, see `.github/workflows/flutter-build.yml` (admin) and
+        // `.github/workflows/client-build.yml` (client).
         #[cfg(target_os = "windows")]
-        let download_url = if cfg!(feature = "flutter") {
+        let download_url = if cfg!(feature = "client") {
             format!(
-                "{}/rustdesk-{}-x86_64.{}",
+                "{}/olidesk-client-{}-x86_64.{}",
                 download_url,
                 version,
                 if update_msi { "msi" } else { "exe" }
             )
+        } else if update_msi {
+            format!("{}/olidesk-{}-x86_64.msi", download_url, version)
         } else {
-            format!("{}/rustdesk-{}-x86-sciter.exe", download_url, version)
+            format!("{}/rustdesk-{}-x86_64.exe", download_url, version)
         };
         log::debug!("New version available: {}", &version);
         let client = create_http_client_with_url(&download_url);
