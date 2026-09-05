@@ -1,6 +1,6 @@
 [package]
 name = "olidesk"
-version = "1.4.23"
+version = "1.4.24"
 authors = ["rustdesk <info@rustdesk.com>"]
 edition = "2021"
 build= "build.rs"

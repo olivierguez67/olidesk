@@ -25,7 +25,7 @@ env:
   TAG_NAME: "${{ github.ref_name }}"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  VERSION: "1.4.23"
+  VERSION: "1.4.24"
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
 
 jobs:
