@@ -472,7 +472,9 @@ jobs:
           cp ./target/armv7-linux-androideabi/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
           cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/
 
-          cargo ndk --platform 21 --target x86_64-linux-android build --release --features flutter,hwcodec,client
+          # x86_64 skips hwcodec, matching flutter/ndk_x64.sh (used by the admin
+          # build) -- hwcodec's FFmpeg headers aren't buildable for this ABI here.
+          cargo ndk --platform 21 --target x86_64-linux-android build --release --features flutter,client
           mkdir -p ./flutter/android/app/src/main/jniLibs/x86_64
           cp ./target/x86_64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/x86_64/librustdesk.so
           cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/x86_64/
