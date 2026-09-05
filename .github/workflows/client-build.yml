@@ -47,6 +47,7 @@ jobs:
     name: olidesk-client-windows-x86_64
     needs: [build-RustDeskTempTopMostWindow, generate-bridge]
     runs-on: windows-2022
+    timeout-minutes: 90
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v7
@@ -200,17 +201,14 @@ jobs:
     name: olidesk-client-macos-${{ matrix.job.arch }}
     needs: [generate-bridge]
     runs-on: ${{ matrix.job.os }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         job:
-          - {
-              target: x86_64-apple-darwin,
-              os: macos-15-intel,
-              extra-build-args: "",
-              arch: x86_64,
-              vcpkg-triplet: x64-osx,
-            }
+          # x86_64 macOS dropped: client deployments are Windows-only shops,
+          # and the intel job hung indefinitely in flutter (run #8 hit the
+          # 6-hour job limit with no output after the Rust build finished).
           - {
               target: aarch64-apple-darwin,
               os: macos-14,
@@ -331,13 +329,25 @@ jobs:
 
   # Client counterpart of `flutter-build.yml`'s `build-rustdesk-android` +
   # `build-rustdesk-android-universal`, built with the `client` Cargo feature.
-  # Only one universal (all-ABI) apk is produced, matching what the auto-updater
-  # (`src/updater.rs`, `main_get_common`'s `download-file-` handler) expects at
-  # `olidesk-client-{version}-universal.apk`.
+  # Mirrors that job's per-arch-per-job structure exactly: an earlier version
+  # of this job installed vcpkg deps for all 3 Android ABIs in one job/workspace
+  # and consistently hit missing FFmpeg headers building the Rust lib, even
+  # after excluding `hwcodec` from x86_64 (which the admin build also excludes
+  # it from, via `flutter/ndk_x64.sh`). Isolating each ABI's vcpkg install to
+  # its own job -- exactly like the admin build already does -- avoids whatever
+  # that collision was.
   build-olidesk-client-android:
-    name: olidesk-client-android-universal
     needs: [generate-bridge]
-    runs-on: ubuntu-24.04
+    name: build olidesk client android lib ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { arch: aarch64, target: aarch64-linux-android, os: ubuntu-24.04 }
+          - { arch: armv7, target: armv7-linux-androideabi, os: ubuntu-24.04 }
+          - { arch: x86_64, target: x86_64-linux-android, os: ubuntu-24.04 }
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -422,20 +432,29 @@ jobs:
           doNotCache: false
 
       - name: Install vcpkg dependencies
-        shell: bash
         run: |
-          for ANDROID_TARGET in arm64-v8a armeabi-v7a x86_64; do
-            if ! ./flutter/build_android_deps.sh "${ANDROID_TARGET}"; then
-              find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
-                echo "$_1:"
-                echo "======"
-                cat "$_1"
-                echo "======"
-                echo ""
-              done
-              exit 1
-            fi
-          done
+          case ${{ matrix.job.target }} in
+            aarch64-linux-android)
+              ANDROID_TARGET=arm64-v8a
+            ;;
+            armv7-linux-androideabi)
+              ANDROID_TARGET=armeabi-v7a
+            ;;
+            x86_64-linux-android)
+              ANDROID_TARGET=x86_64
+            ;;
+          esac
+          if ! ./flutter/build_android_deps.sh "${ANDROID_TARGET}"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+        shell: bash
 
       - name: Restore bridge files
         uses: actions/download-artifact@master
@@ -447,37 +466,145 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
           components: "rustfmt"
 
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: rustdesk-lib-cache-android-client
-          key: universal
+          key: ${{ matrix.job.target }}
 
-      - name: Build olidesk client lib (all ABIs)
+      - name: Build olidesk client lib
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
+          rustup target add ${{ matrix.job.target }}
           cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+          case ${{ matrix.job.target }} in
+            aarch64-linux-android)
+              cargo ndk --platform 21 --target aarch64-linux-android build --release --features flutter,hwcodec,client
+              mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
+              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+            ;;
+            armv7-linux-androideabi)
+              cargo ndk --platform 21 --target armv7-linux-androideabi build --release --features flutter,hwcodec,client
+              mkdir -p ./flutter/android/app/src/main/jniLibs/armeabi-v7a
+              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
+            ;;
+            x86_64-linux-android)
+              # x86_64 skips hwcodec, matching flutter/ndk_x64.sh (used by the
+              # admin build) -- hwcodec's FFmpeg headers aren't buildable for
+              # this ABI here.
+              cargo ndk --platform 21 --target x86_64-linux-android build --release --features flutter,client
+              mkdir -p ./flutter/android/app/src/main/jniLibs/x86_64
+              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/x86_64/librustdesk.so
+            ;;
+          esac
 
-          cargo ndk --platform 21 --target aarch64-linux-android build --release --features flutter,hwcodec,client
-          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
-          cp ./target/aarch64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
-          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
+      - name: Upload client library to Artifacts
+        uses: actions/upload-artifact@master
+        with:
+          name: librustdesk-client.so.${{ matrix.job.target }}
+          path: ./target/${{ matrix.job.target }}/release/liblibrustdesk.so
 
-          cargo ndk --platform 21 --target armv7-linux-androideabi build --release --features flutter,hwcodec,client
-          mkdir -p ./flutter/android/app/src/main/jniLibs/armeabi-v7a
-          cp ./target/armv7-linux-androideabi/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
-          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/
+  build-olidesk-client-android-universal:
+    needs: [build-olidesk-client-android]
+    name: olidesk-client-android-universal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
 
-          # x86_64 skips hwcodec, matching flutter/ndk_x64.sh (used by the admin
-          # build) -- hwcodec's FFmpeg headers aren't buildable for this ABI here.
-          cargo ndk --platform 21 --target x86_64-linux-android build --release --features flutter,client
-          mkdir -p ./flutter/android/app/src/main/jniLibs/x86_64
-          cp ./target/x86_64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/x86_64/librustdesk.so
-          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/x86_64/
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+               clang \
+               cmake \
+               curl \
+               gcc-multilib \
+               git \
+               g++ \
+               g++-multilib \
+               libayatana-appindicator3-dev \
+               libasound2-dev \
+               libc6-dev \
+               libclang-dev \
+               libunwind-dev \
+               libgstreamer1.0-dev \
+               libgstreamer-plugins-base1.0-dev \
+               libgtk-3-dev \
+               libpam0g-dev \
+               libpulse-dev \
+               libva-dev \
+               libxcb-randr0-dev \
+               libxcb-shape0-dev \
+               libxcb-xfixes0-dev \
+               libxdo-dev \
+               libxfixes-dev \
+               llvm-dev \
+               nasm \
+               ninja-build \
+               openjdk-17-jdk-headless \
+               pkg-config \
+               tree \
+               wget
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
+
+      - name: Patch flutter
+        run: |
+          cd $(dirname $(dirname $(which flutter)))
+          [[ "3.24.5" == ${{env.ANDROID_FLUTTER_VERSION}} ]] && git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@master
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Download client library from Artifacts
+        uses: actions/download-artifact@master
+        with:
+          name: librustdesk-client.so.aarch64-linux-android
+          path: ./flutter/android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Download client library from Artifacts
+        uses: actions/download-artifact@master
+        with:
+          name: librustdesk-client.so.armv7-linux-androideabi
+          path: ./flutter/android/app/src/main/jniLibs/armeabi-v7a
+
+      - name: Download client library from Artifacts
+        uses: actions/download-artifact@master
+        with:
+          name: librustdesk-client.so.x86_64-linux-android
+          path: ./flutter/android/app/src/main/jniLibs/x86_64
 
       - name: Build olidesk client apk
         shell: bash
@@ -489,6 +616,12 @@ jobs:
           # Same as the admin android job: use the debug sign config for the raw
           # build, `r0adkll/sign-android-release` re-signs it with the real key below.
           sed -i "s/signingConfigs.release/signingConfigs.debug/g" ./flutter/android/app/build.gradle
+          mv ./flutter/android/app/src/main/jniLibs/arm64-v8a/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
+          mv ./flutter/android/app/src/main/jniLibs/armeabi-v7a/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
+          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/
+          mv ./flutter/android/app/src/main/jniLibs/x86_64/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/x86_64/librustdesk.so
+          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/x86_64/
           pushd flutter
           flutter build apk --release --target-platform android-arm64,android-arm,android-x64
           popd
