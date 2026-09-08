@@ -2,7 +2,20 @@
 	<Fragment>
 		<UI>
 			<Dialog Id="UI_AnotherAppDialog" Width="370" Height="270" Title="!(loc.ExitDialog_Title)">
-				<Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUICancel)">
+				<!--
+				The previous version of this dialog only offered Cancel, forcing a manual
+				uninstall of any prior self-installed (non-MSI) copy first. Continue lets
+				setup proceed normally instead: the standard install sequence already
+				overwrites the same install directory and the same
+				HKLM\...\Uninstall\$(var.Product) registry entry (Product.Registry.UninstallApp
+				in Components/Regs.wxs) that the self-installer used, and already
+				unconditionally terminates any running $(var.Product).exe (TerminateProcesses
+				in Components/RustDesk.wxs), so no separate removal step is needed here.
+				-->
+				<Control Id="Continue" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.AnotherAppDialogContinue)">
+					<Publish Event="EndDialog" Value="Return" />
+				</Control>
+				<Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
 					<Publish Event="EndDialog" Value="ErrorAbort" />
 				</Control>
 				<Control Id="Bitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="234" TabSkip="no" Text="!(loc.ExitDialogBitmap)" />
