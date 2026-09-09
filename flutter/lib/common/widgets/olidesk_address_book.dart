@@ -16,6 +16,15 @@ const _kApiUrlKey = 'olidesk-ab-api-url';
 const _kTokenKey = 'olidesk-ab-token';
 const _kDefaultApiUrl = 'https://olidesk.olisys.co.il';
 
+// The API used to be reached over plaintext at its host:port before it moved
+// behind nginx. Installs from that era saved the old URL into their local
+// options, where it takes precedence over `_kDefaultApiUrl` forever, so rewrite
+// it once on startup. Anything else the user typed is left alone.
+const _kLegacyApiUrls = [
+  'http://172.104.159.65:8443',
+  'https://172.104.159.65:8443',
+];
+
 // ---------------------------------------------------------------------------
 // Data models
 // ---------------------------------------------------------------------------
@@ -150,7 +159,22 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   @override
   void initState() {
     super.initState();
+    _init();
+  }
+
+  // Migrate before the first load, so it is the new URL that gets fetched.
+  Future<void> _init() async {
+    await _migrateLegacyApiUrl();
     if (_isConfigured) _load();
+  }
+
+  Future<void> _migrateLegacyApiUrl() async {
+    final saved = bind.mainGetLocalOption(key: _kApiUrlKey);
+    if (saved.isEmpty) return;
+    final normalized = saved.trim().replaceAll(RegExp(r'/+$'), '');
+    if (_kLegacyApiUrls.contains(normalized)) {
+      await bind.mainSetLocalOption(key: _kApiUrlKey, value: _kDefaultApiUrl);
+    }
   }
 
   // ---------------------------------------------------------------------------
