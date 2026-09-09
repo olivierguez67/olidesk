@@ -305,10 +305,17 @@ class _PeerCardState extends State<_PeerCard>
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              Container(
-                                padding: const EdgeInsets.all(6),
-                                child:
-                                    getPlatformImage(peer.platform, size: 60),
+                              // Gives up space to the text below it instead of
+                              // overflowing the fixed-height card.
+                              Flexible(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    child: getPlatformImage(peer.platform,
+                                        size: 60),
+                                  ),
+                                ),
                               ),
                               Row(
                                 children: [
@@ -324,6 +331,19 @@ class _PeerCardState extends State<_PeerCard>
                                         textAlign: TextAlign.center,
                                         overflow: TextOverflow.ellipsis,
                                       ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      formatID(peer.id),
+                                      style: const TextStyle(
+                                          color: Colors.white54, fontSize: 11),
+                                      textAlign: TextAlign.center,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
                                 ],
@@ -361,7 +381,19 @@ class _PeerCardState extends State<_PeerCard>
                       Expanded(
                           child: Row(children: [
                         getOnline(8, peer.online),
-                        Expanded(child: getPeerLabelWithId(context, peer)),
+                        // Name only -- the id lives inside the card now. Scaled
+                        // down rather than ellipsized so it is never cut off.
+                        Expanded(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              getPeerLabel(peer),
+                              maxLines: 1,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                          ),
+                        ),
                       ]).paddingSymmetric(vertical: 8)),
                       checkBoxOrActionMoreLandscape(peer, isTile: false),
                     ],
