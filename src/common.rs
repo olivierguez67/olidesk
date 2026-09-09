@@ -2068,7 +2068,14 @@ pub fn create_symmetric_key_msg(their_pk_b: [u8; 32]) -> (Bytes, Bytes, secretbo
 
 #[inline]
 pub fn using_public_server() -> bool {
+    // An empty custom server only means the built-in default is in use -- it does
+    // not mean that default is a public one. This build ships its own self-hosted
+    // server in `RENDEZVOUS_SERVERS`, so also check that the default really is a
+    // public server before treating it as one. Otherwise callers throttle
+    // themselves as if they were talking to rustdesk.com, which notably caps peer
+    // online-status polling at `_maxQueryCount` queries in `peers_view.dart`.
     crate::get_custom_rendezvous_server(get_option("custom-rendezvous-server")).is_empty()
+        && config::RENDEZVOUS_SERVERS.iter().any(|s| is_public(s))
 }
 
 pub struct ThrottledInterval {

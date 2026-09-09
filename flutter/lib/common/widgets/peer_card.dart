@@ -184,12 +184,7 @@ class _PeerCardState extends State<_PeerCard>
                     children: [
                       Row(children: [
                         getOnline(isPortrait ? 4 : 8, peer.online),
-                        Expanded(
-                            child: Text(
-                          peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleSmall,
-                        )),
+                        Expanded(child: getPeerLabelWithId(context, peer)),
                       ]).marginOnly(top: isPortrait ? 0 : 2),
                       Row(
                         children: [
@@ -366,12 +361,7 @@ class _PeerCardState extends State<_PeerCard>
                       Expanded(
                           child: Row(children: [
                         getOnline(8, peer.online),
-                        Expanded(
-                            child: Text(
-                          peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleSmall,
-                        )),
+                        Expanded(child: getPeerLabelWithId(context, peer)),
                       ]).paddingSymmetric(vertical: 8)),
                       checkBoxOrActionMoreLandscape(peer, isTile: false),
                     ],
@@ -1462,6 +1452,42 @@ void _rdpDialog(String id) async {
       onCancel: close,
     );
   });
+}
+
+// The name to lead a peer card with: an alias if one was set, otherwise the
+// machine's hostname. Falls back to the id for peers we have no info for yet.
+String getPeerLabel(Peer peer) {
+  if (peer.alias.isNotEmpty) return peer.alias;
+  if (peer.hostname.isNotEmpty) return peer.hostname;
+  return formatID(peer.id);
+}
+
+// Peer name followed by its dimmed id, so a card is readable at a glance
+// without losing the id needed to identify or dictate a peer.
+Widget getPeerLabelWithId(BuildContext context, Peer peer) {
+  final label = getPeerLabel(peer);
+  final id = formatID(peer.id);
+  final idStyle = Theme.of(context).textTheme.bodySmall;
+  return Row(
+    children: [
+      Flexible(
+        child: Text(
+          label,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+      ),
+      if (label != id)
+        Flexible(
+          child: Text(
+            id,
+            overflow: TextOverflow.ellipsis,
+            style: idStyle?.copyWith(
+                color: idStyle.color?.withOpacity(0.6), fontSize: 11),
+          ).marginOnly(left: 6),
+        ),
+    ],
+  );
 }
 
 Widget getOnline(double rightPadding, bool online) {
