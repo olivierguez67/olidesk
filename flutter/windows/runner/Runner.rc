@@ -89,7 +89,7 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "Purslane Ltd" "\0"
+            VALUE "CompanyName", "Olisys" "\0"
             VALUE "FileDescription", "Olidesk Remote Desktop" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "olidesk" "\0"
