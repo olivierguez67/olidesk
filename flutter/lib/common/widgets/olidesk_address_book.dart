@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 import '../../common.dart';
 import '../../models/platform_model.dart';
 import '../../utils/http_service.dart' as http_svc;
+import 'peer_card.dart' show getOnline;
 
 // ---------------------------------------------------------------------------
 // Config keys
@@ -24,6 +25,12 @@ const _kLegacyApiUrls = [
   'http://172.104.159.65:8443',
   'https://172.104.159.65:8443',
 ];
+
+// Same rendezvous-server online query the recent connections view uses. The
+// handler name only has to be distinct from the `Peers` ones, so that both this
+// view and a peers view can listen for the same callback at once.
+const _kCbQueryOnlines = 'callback_query_onlines';
+const _kOnlineHandlerName = 'olidesk-address-book';
 
 // ---------------------------------------------------------------------------
 // Data models
@@ -134,6 +141,11 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   // Captured pointer position for context menu.
   RelativeRect _menuPos = RelativeRect.fromLTRB(0, 0, 0, 0);
 
+  // Online state by Olidesk id, fed by the `_kCbQueryOnlines` callback. An id
+  // missing from the map has not been answered for yet and reads as offline.
+  final _online = <String, bool>{}.obs;
+  Timer? _onlineTimer;
+
   // ---------------------------------------------------------------------------
   // Config accessors
   // ---------------------------------------------------------------------------
@@ -162,11 +174,66 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
     _init();
   }
 
+  @override
+  void dispose() {
+    _onlineTimer?.cancel();
+    platformFFI.unregisterEventHandler(_kCbQueryOnlines, _kOnlineHandlerName);
+    super.dispose();
+  }
+
   // Migrate before the first load, so it is the new URL that gets fetched.
   Future<void> _init() async {
     await _migrateLegacyApiUrl();
+    // Listen before loading, so the first list's replies are not missed.
+    await _startCheckOnlines();
     if (_isConfigured) _load();
   }
+
+  // ---------------------------------------------------------------------------
+  // Online status
+  // ---------------------------------------------------------------------------
+
+  Future<void> _startCheckOnlines() async {
+    platformFFI.registerEventHandler(
+      _kCbQueryOnlines,
+      _kOnlineHandlerName,
+      (evt) async => _updateOnlineState(evt),
+      replace: true,
+    );
+    // Match the recent connections view: back off on the public server, poll
+    // freely against a self-hosted one.
+    final interval = (await bind.mainIsUsingPublicServer())
+        ? const Duration(seconds: 20)
+        : const Duration(seconds: 6);
+    _queryOnlines();
+    _onlineTimer?.cancel();
+    _onlineTimer = Timer.periodic(interval, (_) => _queryOnlines());
+  }
+
+  void _queryOnlines() {
+    final ids = _clients
+        .map((c) => _normalizeId(c.olideskId))
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (ids.isEmpty) return;
+    bind.queryOnlines(ids: ids);
+  }
+
+  void _updateOnlineState(Map<String, dynamic> evt) {
+    final next = <String, bool>{};
+    for (final id in (evt['onlines'] as String? ?? '').split(',')) {
+      if (id.isNotEmpty) next[id] = true;
+    }
+    for (final id in (evt['offlines'] as String? ?? '').split(',')) {
+      if (id.isNotEmpty) next[id] = false;
+    }
+    if (next.isNotEmpty) _online.addAll(next);
+  }
+
+  // Ids arrive from the API however they were stored; the query and its reply
+  // both use the bare digits.
+  String _normalizeId(String id) => id.replaceAll(RegExp(r'\s+'), '');
 
   Future<void> _migrateLegacyApiUrl() async {
     final saved = bind.mainGetLocalOption(key: _kApiUrlKey);
@@ -232,6 +299,9 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
       _clients.value = data
           .map((c) => _AbClient.fromJson(c as Map<String, dynamic>))
           .toList();
+      // Ask about the ids we just learned about rather than waiting for the
+      // next tick, so a freshly loaded list is not briefly all-offline.
+      _queryOnlines();
     } catch (e) {
       _error.value = _friendlyError(e);
       rethrow;
@@ -688,9 +758,19 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
         onSecondaryTap: () => _showContextMenu(context, client),
         child: ListTile(
           leading: _platformIcon(client.platform),
-          title: Text(
-            client.name,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          title: Obx(
+            () => Row(
+              children: [
+                getOnline(8, _online[_normalizeId(client.olideskId)] ?? false),
+                Flexible(
+                  child: Text(
+                    client.name,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w500),
+                  ),
+                ),
+              ],
+            ),
           ),
           subtitle: Row(
             children: [
