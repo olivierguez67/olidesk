@@ -14,7 +14,7 @@ import '../../utils/http_service.dart' as http_svc;
 
 const _kApiUrlKey = 'olidesk-ab-api-url';
 const _kTokenKey = 'olidesk-ab-token';
-const _kDefaultApiUrl = 'http://172.104.159.65:8443';
+const _kDefaultApiUrl = 'https://olidesk.olisys.co.il';
 
 // ---------------------------------------------------------------------------
 // Data models
