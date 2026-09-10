@@ -156,7 +156,7 @@ fn check_update(manually: bool) -> ResultType<()> {
         } else if update_msi {
             format!("{}/olidesk-{}-x86_64.msi", download_url, version)
         } else {
-            format!("{}/rustdesk-{}-x86_64.exe", download_url, version)
+            format!("{}/olidesk-{}-x86_64.exe", download_url, version)
         };
         log::debug!("New version available: {}", &version);
         let client = create_http_client_with_url(&download_url);

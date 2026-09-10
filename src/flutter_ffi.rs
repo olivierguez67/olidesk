@@ -2853,7 +2853,7 @@ pub fn main_get_common(key: String) -> String {
                     } else if is_msi {
                         format!("olidesk-{_version}-x86_64.msi")
                     } else {
-                        format!("rustdesk-{_version}-x86_64.exe")
+                        format!("olidesk-{_version}-x86_64.exe")
                     }
                 }
                 Err(e) => {
@@ -2864,19 +2864,22 @@ pub fn main_get_common(key: String) -> String {
             #[cfg(target_os = "macos")]
             {
                 return if cfg!(target_arch = "x86_64") {
-                    format!("rustdesk-{_version}-x86_64.dmg")
+                    format!("olidesk-{_version}-x86_64.dmg")
                 } else if cfg!(target_arch = "aarch64") {
-                    format!("rustdesk-{_version}-aarch64.dmg")
+                    format!("olidesk-{_version}-aarch64.dmg")
                 } else {
                     "error:unsupported".to_owned()
                 };
             }
             #[cfg(target_os = "android")]
             {
+                // `r0adkll/sign-android-release` appends `-signed`, and that is
+                // the name both workflows publish; without it this asked for a
+                // file that has never existed in a release.
                 return if cfg!(feature = "client") {
-                    format!("olidesk-client-{_version}-universal.apk")
+                    format!("olidesk-client-{_version}-universal-signed.apk")
                 } else {
-                    format!("rustdesk-{_version}-universal.apk")
+                    format!("olidesk-{_version}-universal-signed.apk")
                 };
             }
             #[cfg(not(any(
