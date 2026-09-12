@@ -322,12 +322,19 @@ def ffi_bindgen_function_refactor():
         'sed -i "s/ffi.NativeFunction<ffi.Bool Function(DartPort/ffi.NativeFunction<ffi.Uint8 Function(DartPort/g" flutter/lib/generated_bridge.dart')
 
 
-def build_flutter_deb(version, features):
+def dart_define_args(client):
+    # Keeps the address book's default API URL and networking code out of the
+    # client build's binary entirely (see flutter/lib/consts.dart), rather
+    # than only hiding it at runtime.
+    return ' --dart-define=OLIDESK_CLIENT_BUILD=true' if client else ''
+
+
+def build_flutter_deb(version, features, client=False):
     if not skip_cargo:
         system2(f'cargo build --features {features} --lib --release')
         ffi_bindgen_function_refactor()
     os.chdir('flutter')
-    system2('flutter build linux --release')
+    system2('flutter build linux --release' + dart_define_args(client))
     system2('mkdir -p tmpdeb/usr/bin/')
     system2('mkdir -p tmpdeb/usr/share/rustdesk')
     system2('mkdir -p tmpdeb/etc/rustdesk/')
@@ -408,7 +415,7 @@ def build_deb_from_folder(version, binary_folder):
     os.chdir("..")
 
 
-def build_flutter_dmg(version, features):
+def build_flutter_dmg(version, features, client=False):
     if not skip_cargo:
         # set minimum osx build target, now is 10.14, which is the same as the flutter xcode project
         system2(
@@ -417,7 +424,7 @@ def build_flutter_dmg(version, features):
     system2(
         "cp target/release/liblibrustdesk.dylib target/release/librustdesk.dylib")
     os.chdir('flutter')
-    system2('flutter build macos --release')
+    system2('flutter build macos --release' + dart_define_args(client))
     system2('cp -rf ../target/release/service ./build/macos/Build/Products/Release/Olidesk.app/Contents/MacOS/')
     '''
     system2(
@@ -427,25 +434,25 @@ def build_flutter_dmg(version, features):
     os.chdir("..")
 
 
-def build_flutter_arch_manjaro(version, features):
+def build_flutter_arch_manjaro(version, features, client=False):
     if not skip_cargo:
         system2(f'cargo build --features {features} --lib --release')
     ffi_bindgen_function_refactor()
     os.chdir('flutter')
-    system2('flutter build linux --release')
+    system2('flutter build linux --release' + dart_define_args(client))
     system2(f'strip {flutter_build_dir}/lib/librustdesk.so')
     os.chdir('../res')
     system2('HBB=`pwd`/.. FLUTTER=1 makepkg -f')
 
 
-def build_flutter_windows(version, features, skip_portable_pack):
+def build_flutter_windows(version, features, skip_portable_pack, client=False):
     if not skip_cargo:
         system2(f'cargo build --features {features} --lib --release')
         if not os.path.exists("target/release/librustdesk.dll"):
             print("cargo build failed, please check rust source code.")
             exit(-1)
     os.chdir('flutter')
-    system2('flutter build windows --release')
+    system2('flutter build windows --release' + dart_define_args(client))
     os.chdir('..')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)
@@ -500,7 +507,7 @@ def main():
         os.chdir('../../..')
 
         if flutter:
-            build_flutter_windows(version, features, args.skip_portable_pack)
+            build_flutter_windows(version, features, args.skip_portable_pack, args.client)
             return
         system2('cargo build --release --features ' + features)
         # system2('upx.exe target/release/rustdesk.exe')
@@ -524,7 +531,7 @@ def main():
         # pacman -S -needed base-devel
         system2("sed -i 's/pkgver=.*/pkgver=%s/g' res/PKGBUILD" % version)
         if flutter:
-            build_flutter_arch_manjaro(version, features)
+            build_flutter_arch_manjaro(version, features, args.client)
         else:
             system2('cargo build --release --features ' + features)
             system2('git checkout src/ui/common.tis')
@@ -557,12 +564,12 @@ def main():
     else:
         if flutter:
             if osx:
-                build_flutter_dmg(version, features)
+                build_flutter_dmg(version, features, args.client)
                 pass
             else:
                 # system2(
                 #     'mv target/release/bundle/deb/rustdesk*.deb ./flutter/rustdesk.deb')
-                build_flutter_deb(version, features)
+                build_flutter_deb(version, features, args.client)
         else:
             system2('cargo bundle --release --features ' + features)
             if osx:

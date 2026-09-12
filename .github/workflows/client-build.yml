@@ -25,7 +25,7 @@ env:
   TAG_NAME: "${{ github.ref_name }}"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  VERSION: "1.4.31"
+  VERSION: "1.4.32"
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
 
 jobs:
@@ -623,7 +623,7 @@ jobs:
           mv ./flutter/android/app/src/main/jniLibs/x86_64/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/x86_64/librustdesk.so
           cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/x86_64/
           pushd flutter
-          flutter build apk --release --target-platform android-arm64,android-arm,android-x64
+          flutter build apk --release --target-platform android-arm64,android-arm,android-x64 --dart-define=OLIDESK_CLIENT_BUILD=true
           popd
           mkdir -p signed-apk
           mv ./flutter/build/app/outputs/flutter-apk/app-release.apk signed-apk/olidesk-client-${{ env.VERSION }}-universal.apk

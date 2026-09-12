@@ -4,6 +4,16 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 
+// Compile-time flag for the stripped-down client build, set via
+// `--dart-define=OLIDESK_CLIENT_BUILD=true` (see build.py). Unlike the
+// runtime `disable-ab` hard setting, this is a compile-time constant, so
+// code gated behind it (e.g. `kOlideskClientBuild ? a : b`) is dead-code
+// eliminated from the client release binary instead of merely being hidden
+// at runtime -- used to keep the address book's default API URL and
+// networking code out of the client build entirely.
+const bool kOlideskClientBuild =
+    bool.fromEnvironment('OLIDESK_CLIENT_BUILD', defaultValue: false);
+
 const int kMaxVirtualDisplayCount = 4;
 const int kAllVirtualDisplay = -1;
 

@@ -67,7 +67,12 @@ class _PeerTabPageState extends State<PeerTabPage>
       ),
       ({dynamic hint}) => gFFI.groupModel.pull(force: hint == null),
     ),
-    _TabEntry(const OlideskAddressBook()),
+    // `kOlideskClientBuild` is a compile-time constant, so in a client build
+    // this ternary's `true` branch -- and with it the whole OlideskAddressBook
+    // widget, its default API URL, and its networking code -- is dead-code
+    // eliminated from the release binary rather than merely hidden at runtime.
+    _TabEntry(
+        kOlideskClientBuild ? const SizedBox.shrink() : const OlideskAddressBook()),
   ];
   RelativeRect? mobileTabContextMenuPos;
 
