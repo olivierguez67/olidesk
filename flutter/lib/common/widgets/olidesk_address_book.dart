@@ -325,6 +325,38 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
     await _fetchClients(groupId: _selectedGroupId.value);
   }
 
+  Future<void> _apiUpdateClient(int id, Map<String, dynamic> body) async {
+    final resp = await http_svc
+        .put(Uri.parse('$_apiUrl/api/clients/$id'),
+            headers: _headers, body: jsonEncode(body))
+        .timeout(const Duration(seconds: 10),
+            onTimeout: () =>
+                throw TimeoutException('Request timed out after 10 s'));
+    _handleStatus(resp.statusCode);
+  }
+
+  Future<void> _apiUpdateGroup(int id, String name, int? parentId) async {
+    final resp = await http_svc
+        .put(Uri.parse('$_apiUrl/api/groups/$id'),
+            headers: _headers,
+            body: jsonEncode({'name': name, 'parent_id': parentId}))
+        .timeout(const Duration(seconds: 10),
+            onTimeout: () =>
+                throw TimeoutException('Request timed out after 10 s'));
+    _handleStatus(resp.statusCode);
+    await _fetchGroups();
+  }
+
+  // A group cannot be reparented onto itself or one of its own descendants,
+  // which would detach the subtree from the tree entirely.
+  Set<int> _subtreeIds(_AbGroup g) {
+    final ids = <int>{g.id};
+    for (final c in g.children) {
+      ids.addAll(_subtreeIds(c));
+    }
+    return ids;
+  }
+
   Future<void> _apiMoveClient(int id, int? groupId) async {
     await http_svc.post(
       Uri.parse('$_apiUrl/api/clients/$id/move'),
@@ -337,7 +369,16 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   void _handleStatus(int code) {
     if (code == 401) throw Exception('Unauthorized — check API token');
     if (code == 403) throw Exception('Forbidden');
+    if (code == 404) {
+      throw Exception('Not found (404) — no such record, or the API does not '
+          'implement this endpoint');
+    }
+    if (code == 405) {
+      throw Exception('Not allowed (405) — the API does not support this '
+          'operation on that endpoint');
+    }
     if (code >= 500) throw Exception('Server error ($code)');
+    if (code >= 400) throw Exception('Request rejected ($code)');
   }
 
   String _friendlyError(Object e) {
@@ -612,6 +653,11 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         items: [
           PopupMenuItem(
+            value: 'edit',
+            child: _menuItem(Icons.edit_outlined, translate('Edit')),
+          ),
+          const PopupMenuDivider(height: 4),
+          PopupMenuItem(
             value: 'delete',
             child: _menuItem(Icons.delete_outline, translate('Delete'),
                 color: Colors.redAccent),
@@ -620,6 +666,7 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
         elevation: 6,
       ).then((action) {
         if (!mounted || action == null) return;
+        if (action == 'edit') _showEditGroupDialog(context, g);
         if (action == 'delete') _confirmDeleteGroup(context, g);
       });
     }
@@ -1223,11 +1270,89 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
     );
   }
 
+  void _showEditGroupDialog(BuildContext context, _AbGroup group) {
+    final nameCtrl = TextEditingController(text: group.name);
+    int? parentId = group.parentId;
+    // Its own subtree would be an invalid parent, so keep it out of the list.
+    final blocked = _subtreeIds(group);
+    final allFlat =
+        _flattenAll(_groups).where((fg) => !blocked.contains(fg.group.id));
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: Text(translate('Edit')),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: translate('Name'),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int?>(
+                  value: parentId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Parent group (optional)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(
+                        value: null, child: Text('None (top level)')),
+                    ...allFlat.map((fg) => DropdownMenuItem(
+                          value: fg.group.id,
+                          child: Text(
+                            '${'  ' * fg.depth}${fg.group.name}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        )),
+                  ],
+                  onChanged: (v) => setDlg(() => parentId = v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(translate('Cancel')),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                Navigator.pop(ctx);
+                try {
+                  await _apiUpdateGroup(group.id, name, parentId);
+                } catch (e) {
+                  _error.value = _friendlyError(e);
+                }
+              },
+              child: Text(translate('Save')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showEditClientDialog(BuildContext context, _AbClient client) {
+    final idCtrl = TextEditingController(text: client.olideskId);
     final nameCtrl = TextEditingController(text: client.name);
     final hostnameCtrl = TextEditingController(text: client.hostname ?? '');
     final notesCtrl = TextEditingController(text: client.notes ?? '');
     String? platform = client.platform;
+    int? groupId = client.groupId;
+    final allFlat = _flattenAll(_groups);
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -1240,6 +1365,16 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextField(
+                    controller: idCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Olidesk ID',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
                     controller: nameCtrl,
                     autofocus: true,
                     decoration: InputDecoration(
@@ -1247,6 +1382,28 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                       border: const OutlineInputBorder(),
                       isDense: true,
                     ),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<int?>(
+                    value: groupId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Group',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: [
+                      const DropdownMenuItem(
+                          value: null, child: Text('None (ungrouped)')),
+                      ...allFlat.map((fg) => DropdownMenuItem(
+                            value: fg.group.id,
+                            child: Text(
+                              '${'  ' * fg.depth}${fg.group.name}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          )),
+                    ],
+                    onChanged: (v) => setDlg(() => groupId = v),
                   ),
                   const SizedBox(height: 10),
                   TextField(
@@ -1297,12 +1454,12 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
             ElevatedButton(
               onPressed: () async {
                 final name = nameCtrl.text.trim();
-                if (name.isEmpty) return;
+                final olideskId = _normalizeId(idCtrl.text);
+                if (name.isEmpty || olideskId.isEmpty) return;
                 Navigator.pop(ctx);
-                await http_svc.put(
-                  Uri.parse('$_apiUrl/api/clients/${client.id}'),
-                  headers: _headers,
-                  body: jsonEncode({
+                try {
+                  await _apiUpdateClient(client.id, {
+                    'olidesk_id': olideskId,
                     'name': name,
                     'hostname': hostnameCtrl.text.trim().isEmpty
                         ? null
@@ -1311,9 +1468,16 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                     'notes': notesCtrl.text.trim().isEmpty
                         ? null
                         : notesCtrl.text.trim(),
-                  }),
-                );
-                await _fetchClients(groupId: _selectedGroupId.value);
+                  });
+                  // The group has its own endpoint, so only call it when the
+                  // selection actually changed.
+                  if (groupId != client.groupId) {
+                    await _apiMoveClient(client.id, groupId);
+                  }
+                  await _fetchClients(groupId: _selectedGroupId.value);
+                } catch (e) {
+                  _error.value = _friendlyError(e);
+                }
               },
               child: Text(translate('Save')),
             ),
