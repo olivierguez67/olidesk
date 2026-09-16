@@ -51,15 +51,16 @@ use scrap::android::{call_main_service_key_event, call_main_service_pointer_inpu
 use scrap::camera;
 use serde_derive::Serialize;
 use serde_json::{json, value::Value};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use std::sync::atomic::Ordering;
 use std::{
     collections::HashSet,
-    net::Ipv6Addr,
+    net::{IpAddr, Ipv6Addr},
     num::NonZeroI64,
     path::PathBuf,
     str::FromStr,
-    sync::{atomic::AtomicI64, mpsc as std_mpsc},
+    sync::{
+        atomic::{AtomicBool, AtomicI64, Ordering},
+        mpsc as std_mpsc,
+    },
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use system_shutdown;
@@ -70,8 +71,113 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use crate::virtual_display_manager;
 pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 
+const FAILURE_IDX_ID_WHITELIST: usize = 2;
+// How long a rejection counts, so also how long a blocked address stays blocked. Longer
+// throttles enumeration harder; shorter limits collateral on whitelisted neighbours.
+const ID_WHITELIST_FAILURE_DECAY_MINUTES: i32 = 10;
+
+/// A connection not authorized within this long of starting is closed, however alive it
+/// keeps itself: a wrong password, a pending 2FA, an accept prompt or an admin-terminal
+/// credential prompt still unanswered. The controller reconnects on its own and the prompt
+/// comes back. A connection that says nothing at all goes at the 30 s idle timeout already.
+const LOGIN_GRACE: Duration = Duration::from_secs(180);
+/// Connections between accept and authorization, across every transport: the resource bound.
+/// At this many a further arrival is refused and the oldest is told to go, one at a time.
+const MAX_UNAUTHORIZED_CONNS: usize = 64;
+/// Of those, how many one address may hold at once: a quarter of the room. A fairness cap
+/// against the cheapest flood, one host with one address, not a security boundary: any pool
+/// of addresses passes it, and the bound above is what holds. Meaningful only while the
+/// address is the controller's own, which punch and relay messages carry today.
+const MAX_UNAUTHORIZED_CONNS_PER_ADDR: usize = 16;
+
+/// A place among the unauthorized connections, taken before the identity handshake and given
+/// back on drop: at authorization, or when the connection ends first. The count of live
+/// guards is the bound; an evicted one is told to go and keeps its place until it has.
+pub struct UnauthorizedID {
+    id: i32,
+    shared: Arc<UnauthorizedShared>,
+}
+
+struct UnauthorizedShared {
+    evicted: AtomicBool,
+    notify: hbb_common::tokio::sync::Notify,
+}
+
+/// Admit a connection from `ip` among the unauthorized ones. `None` when that address already
+/// holds its share, or when the global limit is reached: then the oldest connection is told to
+/// go, unless one is on its way out already, and this one is refused rather than let in on a
+/// place that is still occupied. At most one connection is ever on its way out, so a burst of
+/// refused arrivals clears no more room than a single one. The controller retries on its own.
+pub fn admit_unauthorized(id: i32, ip: IpAddr) -> Option<UnauthorizedID> {
+    let mut conns = UNAUTHORIZED_CONNS.lock().unwrap();
+    if conns.iter().filter(|(_, held, _)| *held == ip).count() >= MAX_UNAUTHORIZED_CONNS_PER_ADDR {
+        return None;
+    }
+    if conns.len() >= MAX_UNAUTHORIZED_CONNS {
+        if let Some((_, _, oldest)) = conns.first() {
+            if !oldest.evicted.swap(true, Ordering::AcqRel) {
+                oldest.notify.notify_one();
+            }
+        }
+        return None;
+    }
+    let shared = Arc::new(UnauthorizedShared {
+        evicted: AtomicBool::new(false),
+        notify: hbb_common::tokio::sync::Notify::new(),
+    });
+    conns.push((id, ip, shared.clone()));
+    Some(UnauthorizedID { id, shared })
+}
+
+impl UnauthorizedID {
+    /// Whether this connection was told to go to make room for a newer one.
+    pub fn is_evicted(&self) -> bool {
+        self.shared.evicted.load(Ordering::Acquire)
+    }
+
+    /// Resolves once this connection is told to go; at once if it already was.
+    pub async fn evicted(&self) {
+        if self.is_evicted() {
+            return;
+        }
+        self.shared.notify.notified().await;
+    }
+}
+
+impl Drop for UnauthorizedID {
+    fn drop(&mut self) {
+        UNAUTHORIZED_CONNS
+            .lock()
+            .unwrap()
+            .retain(|(id, _, _)| *id != self.id);
+    }
+}
+
+/// Resolves when the connection holding `unauthorized` is evicted; never once it has
+/// authorized and given its place back.
+async fn unauthorized_evicted(unauthorized: &Option<UnauthorizedID>) {
+    match unauthorized {
+        Some(u) => u.evicted().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Resolves at the login deadline of a connection started at `started`; never once it has
+/// authorized.
+async fn login_deadline(authorized: bool, started: Instant) {
+    if authorized {
+        return std::future::pending().await;
+    }
+    time::sleep_until(started + LOGIN_GRACE).await
+}
+
 lazy_static::lazy_static! {
-    static ref LOGIN_FAILURES: [Arc::<Mutex<HashMap<String, (i32, i32, i32)>>>; 2] = Default::default();
+    // Connections between accept and authorization, oldest first; see admit_unauthorized.
+    static ref UNAUTHORIZED_CONNS: Mutex<Vec<(i32, IpAddr, Arc<UnauthorizedShared>)>> = Default::default();
+    // [0] password, [1] 2FA, [2] ID whitelist.
+    // Bucket 2 is separate so its rejections do not touch the password / 2FA budgets. It is
+    // decayed in `check_id_whitelist` and cleared on auth, never on a bare id match.
+    static ref LOGIN_FAILURES: [Arc::<Mutex<HashMap<String, (i32, i32, i32)>>>; 3] = Default::default();
     static ref SESSIONS: Arc::<Mutex<HashMap<SessionKey, Session>>> = Default::default();
     // Remembers peers that recently passed 2FA, so a dropped connection does not force a new code.
     // In memory only: cleared whenever the service restarts.
@@ -283,6 +389,8 @@ pub struct Connection {
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
+    // The place among the unauthorized connections; given back at authorization.
+    unauthorized_id: Option<UnauthorizedID>,
     require_2fa: Option<totp_rs::TOTP>,
     keyboard: bool,
     clipboard: bool,
@@ -418,6 +526,7 @@ impl Connection {
         id: i32,
         server: super::ServerPtrWeak,
         control_permissions: Option<ControlPermissions>,
+        unauthorized: UnauthorizedID,
     ) {
         // Android is not supported yet, so we always set control_permissions to None.
         #[cfg(target_os = "android")]
@@ -475,6 +584,7 @@ impl Connection {
             port_forward_address: "".to_owned(),
             tx_to_cm,
             authorized: false,
+            unauthorized_id: Some(unauthorized),
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
             clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
             audio: Self::permission(keys::OPTION_ENABLE_AUDIO, &control_permissions),
@@ -587,6 +697,7 @@ impl Connection {
         let mut test_delay_timer =
             crate::rustdesk_interval(time::interval_at(Instant::now(), TEST_DELAY_TIMEOUT));
         let mut last_recv_time = Instant::now();
+        let started = Instant::now();
 
         conn.stream.set_send_timeout(
             if conn.file_transfer.is_some() || conn.port_forward_socket.is_some() || conn.terminal {
@@ -626,6 +737,17 @@ impl Connection {
             tokio::select! {
                 // biased; // video has higher priority // causing test_delay_timer failed while transferring big file
 
+                // Both end an unauthorized connection at once, not on the next timer tick:
+                // told to go to make room, or past the grace for its authorization. Neither
+                // fires once the connection has authorized.
+                _ = unauthorized_evicted(&conn.unauthorized_id) => {
+                    conn.on_close("Timeout", true).await;
+                    break;
+                }
+                _ = login_deadline(conn.authorized, started) => {
+                    conn.on_close("Timeout", true).await;
+                    break;
+                }
                 Some(data) = rx_from_cm.recv() => {
                     match data {
                         ipc::Data::Authorize => {
@@ -1556,6 +1678,10 @@ impl Connection {
             return false;
         }
         self.authorized = true;
+        self.unauthorized_id = None;
+        // Releases the budget `check_id_whitelist` charges against this address: only a peer
+        // that got this far proved more than a self-reported id.
+        self.clear_id_whitelist_failures();
         if need_2fa {
             // Passed the gate above without entering a code, so keep the grace period running
             // from this connection's activity instead of letting it expire mid-session.
@@ -6194,6 +6320,379 @@ mod raii {
 mod test {
     #[allow(unused)]
     use super::*;
+
+    // The registry is process-global and the harness runs tests in parallel threads, so every
+    // test that admits connections holds this first; a poisoned lock is still a lock.
+    static UNAUTHORIZED_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn unauthorized_count() -> usize {
+        UNAUTHORIZED_CONNS.lock().unwrap().len()
+    }
+
+    #[test]
+    fn test_unauthorized_admission_is_per_address() {
+        let _serial = UNAUTHORIZED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let a: IpAddr = "203.0.113.1".parse().unwrap();
+        let b: IpAddr = "203.0.113.2".parse().unwrap();
+        let held: Vec<_> = (0..MAX_UNAUTHORIZED_CONNS_PER_ADDR as i32)
+            .map(|i| admit_unauthorized(1_000_000 + i, a).unwrap())
+            .collect();
+        assert!(admit_unauthorized(1_000_100, a).is_none());
+        assert!(
+            held.iter().all(|u| !u.is_evicted()),
+            "a refusal evicts nobody"
+        );
+        let other = admit_unauthorized(1_000_101, b).unwrap();
+        assert!(!other.is_evicted());
+        drop(held);
+        assert!(admit_unauthorized(1_000_102, a).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_unauthorized_full_tells_the_oldest_to_go_and_frees_its_place_only_when_it_has() {
+        let _serial = UNAUTHORIZED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held: Vec<_> = (0..MAX_UNAUTHORIZED_CONNS as i32)
+            .map(|i| {
+                let ip: IpAddr = format!("198.51.100.{}", i + 1).parse().unwrap();
+                admit_unauthorized(2_000_000 + i, ip).unwrap()
+            })
+            .collect();
+        // At the limit the newcomer is refused, the oldest is told to go, and the count does
+        // not move: the place is still occupied.
+        assert!(admit_unauthorized(2_000_999, "198.51.100.250".parse().unwrap()).is_none());
+        assert!(held[0].is_evicted());
+        assert!(held[1..].iter().all(|u| !u.is_evicted()));
+        assert_eq!(unauthorized_count(), MAX_UNAUTHORIZED_CONNS);
+        hbb_common::timeout(1000, held[0].evicted()).await.unwrap();
+        // A further arrival while that one is still on its way out tells nobody else to go: a
+        // burst of refused arrivals clears no more room than a single one.
+        assert!(admit_unauthorized(2_001_000, "198.51.100.251".parse().unwrap()).is_none());
+        assert!(held[1..].iter().all(|u| !u.is_evicted()));
+        // Only once an evicted connection has gone is there a place for a newcomer.
+        drop(held.remove(0));
+        assert_eq!(unauthorized_count(), MAX_UNAUTHORIZED_CONNS - 1);
+        let newcomer = admit_unauthorized(2_001_001, "198.51.100.252".parse().unwrap()).unwrap();
+        assert!(!newcomer.is_evicted());
+        assert_eq!(unauthorized_count(), MAX_UNAUTHORIZED_CONNS);
+        // Full again, the next arrival tells the connection now oldest to go.
+        assert!(admit_unauthorized(2_001_002, "198.51.100.253".parse().unwrap()).is_none());
+        assert!(held[0].is_evicted());
+        assert!(held[1..].iter().all(|u| !u.is_evicted()));
+        assert!(!newcomer.is_evicted());
+    }
+
+    // The per-address share holds at the limit too: an address can turn out at most that many
+    // connections, one per place it then takes, and is refused before any eviction from then on.
+    #[test]
+    fn test_unauthorized_full_one_address_turns_out_at_most_its_share() {
+        let _serial = UNAUTHORIZED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held: Vec<_> = (0..MAX_UNAUTHORIZED_CONNS as i32)
+            .map(|i| {
+                let ip: IpAddr = format!("198.51.100.{}", i + 1).parse().unwrap();
+                admit_unauthorized(3_000_000 + i, ip).unwrap()
+            })
+            .collect();
+        let flooder: IpAddr = "203.0.113.9".parse().unwrap();
+        let mut taken = Vec::new();
+        for i in 0..MAX_UNAUTHORIZED_CONNS_PER_ADDR as i32 {
+            assert!(admit_unauthorized(3_001_000 + i, flooder).is_none());
+            assert!(held[0].is_evicted());
+            drop(held.remove(0));
+            taken.push(admit_unauthorized(3_002_000 + i, flooder).unwrap());
+        }
+        assert_eq!(unauthorized_count(), MAX_UNAUTHORIZED_CONNS);
+        assert!(admit_unauthorized(3_003_000, flooder).is_none());
+        assert!(held.iter().all(|u| !u.is_evicted()));
+        assert!(taken.iter().all(|u| !u.is_evicted()));
+    }
+
+    /// A loopback TCP connection as create_tcp_connection sees it, and the controller's end,
+    /// which never speaks: the connection stalls in the identity handshake.
+    async fn stalled_incoming() -> (Stream, Stream, SocketAddr) {
+        let listener = hbb_common::tcp::new_listener("127.0.0.1:0", false)
+            .await
+            .unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let controller = hbb_common::socket_client::connect_tcp(host, 3000)
+            .await
+            .unwrap();
+        let (accepted, addr) = listener.accept().await.unwrap();
+        let served = Stream::Tcp(hbb_common::tcp::FramedStream::from(accepted, addr));
+        (served, controller, addr)
+    }
+
+    // Live connections, not bookkeeping: with the limit reached by connections stalled in the
+    // handshake, one more arrival is refused and the oldest handshake is ended at once, not on
+    // a timer tick, so the live count never exceeds the limit and a place opens only then.
+    #[tokio::test]
+    async fn test_unauthorized_limit_bounds_live_handshakes() {
+        let _serial = UNAUTHORIZED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let server = crate::server::new_for_test();
+        let mut controllers = Vec::new();
+        let mut handshakes = Vec::new();
+        for i in 0..MAX_UNAUTHORIZED_CONNS {
+            let (served, controller, _) = stalled_incoming().await;
+            controllers.push(controller);
+            // Each from an address of its own, so only the global limit is in play.
+            let addr: SocketAddr = format!("192.0.2.{}:1", i + 1).parse().unwrap();
+            let server = server.clone();
+            handshakes.push(tokio::spawn(async move {
+                crate::server::create_tcp_connection(server, served, addr, true, Default::default())
+                    .await
+            }));
+        }
+        for _ in 0..200 {
+            if unauthorized_count() == MAX_UNAUTHORIZED_CONNS {
+                break;
+            }
+            hbb_common::sleep(0.02).await;
+        }
+        assert_eq!(unauthorized_count(), MAX_UNAUTHORIZED_CONNS);
+        assert!(handshakes.iter().all(|h| !h.is_finished()));
+
+        let (served, _controller, _) = stalled_incoming().await;
+        let addr: SocketAddr = "192.0.2.200:1".parse().unwrap();
+        let refused = crate::server::create_tcp_connection(
+            server.clone(),
+            served,
+            addr,
+            true,
+            Default::default(),
+        )
+        .await;
+        assert!(refused.is_err());
+        let ended = hbb_common::timeout(2000, handshakes.remove(0)).await;
+        assert!(
+            matches!(ended, Ok(Ok(Err(_)))),
+            "the oldest handshake ends on eviction"
+        );
+        assert_eq!(unauthorized_count(), MAX_UNAUTHORIZED_CONNS - 1);
+        assert!(
+            handshakes.iter().all(|h| !h.is_finished()),
+            "only the oldest was ended"
+        );
+
+        drop(controllers);
+        for h in handshakes {
+            assert!(
+                matches!(hbb_common::timeout(3000, h).await, Ok(Ok(Err(_)))),
+                "a stalled handshake ends when its controller goes"
+            );
+        }
+        assert_eq!(unauthorized_count(), 0, "no handshake outlives the test");
+    }
+
+    #[cfg(feature = "flutter")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn test_pending_switch_sides_uuid_is_claimed_once() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let uuid = uuid::Uuid::new_v4();
+        let other_uuid = uuid::Uuid::new_v4();
+        assert!(insert_pending_switch_sides_uuid(id.clone(), uuid.clone()));
+
+        assert!(!insert_pending_switch_sides_uuid(id.clone(), uuid.clone()));
+        assert!(has_pending_switch_sides_uuid(&id, &uuid));
+        assert!(!has_pending_switch_sides_uuid(&id, &other_uuid));
+        assert!(!claim_pending_switch_sides_uuid("other-peer", &uuid));
+        assert!(!claim_pending_switch_sides_uuid(&id, &other_uuid));
+        assert!(claim_pending_switch_sides_uuid(&id, &uuid));
+        assert!(!has_pending_switch_sides_uuid(&id, &uuid));
+        assert!(!claim_pending_switch_sides_uuid(&id, &uuid));
+        assert!(!insert_pending_switch_sides_uuid(id, uuid));
+    }
+
+    #[test]
+    fn login_scope_latches_session_scope_across_login_retries() {
+        let port_forward = |host: &str| {
+            let mut lr = LoginRequest::new();
+            lr.my_id = "peer".to_owned();
+            lr.set_port_forward(PortForward {
+                host: host.to_owned(),
+                port: 3389,
+                ..Default::default()
+            });
+            lr
+        };
+        let first = port_forward("localhost");
+        let scope = |lr: &LoginRequest| Connection::login_scope_digest(lr);
+
+        // A retry may carry new credentials, profile data, options, and unknown fields.
+        let mut retry = port_forward("localhost");
+        retry.password = "secret".into();
+        retry.hwid = "hwid".into();
+        retry.os_login = Some(OSLogin {
+            username: "admin".to_owned(),
+            ..Default::default()
+        })
+        .into();
+        retry.my_name = "New Display Name".to_owned();
+        retry.avatar = "data:image/png;base64,AAAA".to_owned();
+        retry
+            .special_fields
+            .mut_unknown_fields()
+            .add_varint(9999, 1);
+        assert_eq!(scope(&first), scope(&retry));
+
+        // It may not change the controller identity, move the target, or switch type.
+        let mut rotated_id = first.clone();
+        rotated_id.my_id = "rotated-id".to_owned();
+        assert_ne!(scope(&first), scope(&rotated_id));
+        assert_ne!(scope(&first), scope(&port_forward("10.0.0.5")));
+        let mut moved_port = port_forward("localhost");
+        moved_port.mut_port_forward().port = 22;
+        assert_ne!(scope(&first), scope(&moved_port));
+        let terminal = |service_id: &str| {
+            let mut lr = LoginRequest::new();
+            lr.my_id = "peer".to_owned();
+            lr.set_terminal(Terminal {
+                service_id: service_id.to_owned(),
+                ..Default::default()
+            });
+            lr
+        };
+        assert_ne!(scope(&first), scope(&terminal("")));
+        assert_ne!(scope(&terminal("a")), scope(&terminal("b")));
+    }
+
+    #[test]
+    fn test_wildcard_match() {
+        // Exact match.
+        assert!(wildcard_match("123456789", "123456789"));
+        assert!(!wildcard_match("123456789", "123456780"));
+        assert!(!wildcard_match("12345678", "123456789"));
+        assert!(!wildcard_match("123456789", "12345678"));
+        // Case-insensitive.
+        assert!(wildcard_match("MyCustomId", "mycustomid"));
+        // '*' matches any sequence.
+        assert!(wildcard_match("*", "123456789"));
+        assert!(wildcard_match("*", ""));
+        assert!(wildcard_match("*", "*abc"));
+        assert!(wildcard_match("123*", "123456789"));
+        assert!(wildcard_match("123*", "123"));
+        assert!(wildcard_match("12*", "12*9"));
+        assert!(!wildcard_match("123*", "124456789"));
+        assert!(wildcard_match("*789", "123456789"));
+        assert!(wildcard_match("1*9", "123456789"));
+        assert!(wildcard_match("1*4*9", "123456789"));
+        assert!(!wildcard_match("1*4*9", "123456780"));
+        assert!(wildcard_match("*456*", "123456789"));
+        // '?' matches exactly one character.
+        assert!(wildcard_match("12345678?", "123456789"));
+        assert!(!wildcard_match("123456789?", "123456789"));
+        assert!(wildcard_match("???456???", "123456789"));
+        assert!(wildcard_match("1?3*7?9", "123456789"));
+        // Whitespace around entries is ignored.
+        assert!(wildcard_match(" 123456789 ", "123456789"));
+    }
+
+    #[test]
+    fn test_decay_stale_failures() {
+        let entry = |minute: i32| (minute, 1, 40);
+        let keys = ["ip".to_string(), "p64".to_string(), "absent".to_string()];
+        let mut m: HashMap<String, (i32, i32, i32)> = HashMap::new();
+        m.insert("ip".to_string(), entry(100));
+        m.insert("p64".to_string(), entry(160));
+        m.insert("untouched".to_string(), entry(100));
+
+        // Exactly at the window: forgotten. Still inside it: kept.
+        decay_stale_failures(&mut m, &keys, 160, 60);
+        assert!(!m.contains_key("ip"));
+        assert!(m.contains_key("p64"));
+        // Keys that were not passed in are never visited, absent ones are a no-op.
+        assert!(m.contains_key("untouched"));
+
+        // One minute short of the window keeps the entry.
+        decay_stale_failures(&mut m, &keys, 219, 60);
+        assert!(m.contains_key("p64"));
+        decay_stale_failures(&mut m, &keys, 220, 60);
+        assert!(!m.contains_key("p64"));
+
+        // A clock that jumped backwards must not drop anything.
+        m.insert("ip".to_string(), entry(500));
+        decay_stale_failures(&mut m, &keys, 0, 60);
+        assert!(m.contains_key("ip"));
+    }
+
+    #[test]
+    fn test_clear_failures_drops_shared_prefixes() {
+        // On IPv6 a whitelisted peer usually has no entry of its own, while the shared
+        // prefixes that block it do. Clearing must not depend on the per-address entry.
+        let mut m: HashMap<String, (i32, i32, i32)> = HashMap::new();
+        m.insert("p64".to_string(), (100, 1, 55));
+        m.insert("p56".to_string(), (100, 1, 75));
+        m.insert("p48".to_string(), (100, 1, 95));
+        m.insert("someone-else".to_string(), (100, 1, 95));
+        let keys = ["ip", "p64", "p56", "p48"].map(|k| k.to_string());
+
+        clear_failures(&mut m, &keys);
+
+        for key in ["p64", "p56", "p48"] {
+            assert!(!m.contains_key(key), "{key} should have been cleared");
+        }
+        // Keys belonging to other peers are left alone.
+        assert!(m.contains_key("someone-else"));
+    }
+
+    #[test]
+    fn test_id_whitelist_allows() {
+        let list = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+
+        // An empty whitelist allows everyone.
+        assert!(id_whitelist_allows(&[], "123456789"));
+
+        // Same server: the peer reports a bare id.
+        assert!(id_whitelist_allows(&list(&["123456789"]), "123456789"));
+        assert!(!id_whitelist_allows(&list(&["123456789"]), "987654321"));
+
+        // Cross server: the peer appends its own server, which must not reject it.
+        assert!(id_whitelist_allows(
+            &list(&["123456789"]),
+            "123456789@example.com:21116"
+        ));
+        // Cross server from web, whose server is a WebSocket URI.
+        assert!(id_whitelist_allows(
+            &list(&["123456789"]),
+            "123456789@wss://example.com:21118/ws/id"
+        ));
+        // A different id is still rejected, suffix or not.
+        assert!(!id_whitelist_allows(
+            &list(&["123456789"]),
+            "987654321@example.com:21116"
+        ));
+
+        // An entry pinned to one server keeps matching that exact form.
+        assert!(id_whitelist_allows(
+            &list(&["123456789@example.com:21116"]),
+            "123456789@example.com:21116"
+        ));
+        assert!(!id_whitelist_allows(
+            &list(&["123456789@example.com:21116"]),
+            "123456789@other.com:21116"
+        ));
+        // ... and no longer matches the bare id, which is the point of pinning.
+        assert!(!id_whitelist_allows(
+            &list(&["123456789@example.com:21116"]),
+            "123456789"
+        ));
+
+        // Wildcards keep working on both forms.
+        assert!(id_whitelist_allows(&list(&["abc*"]), "abcdef"));
+        assert!(id_whitelist_allows(
+            &list(&["abc*"]),
+            "abcdef@example.com:21116"
+        ));
+        assert!(id_whitelist_allows(
+            &list(&["*"]),
+            "123456789@example.com:21116"
+        ));
+
+        // Any entry of the list is enough.
+        assert!(id_whitelist_allows(
+            &list(&["111111111", "123456789", "222222222"]),
+            "123456789@example.com:21116"
+        ));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
