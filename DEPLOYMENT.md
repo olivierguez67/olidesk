@@ -25,16 +25,21 @@ launches) and deletes the JSON file. See
    gitignored and never committed. On the server, create it once from the
    example (a `git pull` never touches it after that):
    ```
-   cp olidesk-api/config.json.example olidesk-api/config.json
+   cd olidesk-api
+   cp config.json.example config.json
    ```
 2. Fill in real values for `token` (admin) and `deploy_token` — two separate
    random strings. `deploy_token` can only call `/api/clients/register`; it
    cannot read, list, or modify anything else in the address book, so it's
    safe to embed in deployment packages.
-3. Restart the API container so it picks up the config:
+3. From inside `olidesk-api/` (where `docker-compose.yml` lives — its build
+   context and volume paths are relative to that directory), bring the API
+   up:
    ```
-   docker compose restart olidesk-api
+   docker compose up -d --build
    ```
+   After a config-only change, `docker compose restart olidesk-api` is
+   enough.
 
 ## Building a deploy package
 

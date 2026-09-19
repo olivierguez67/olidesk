@@ -1,64 +1,20 @@
-version: "3.8"
-
-# Olidesk server stack — relay + signal + address-book API
-# Place your actual relay/signal config in hbbr/hbbs sections as needed.
+# Olidesk address-book API — this service only. The relay/signal servers
+# (hbbr/hbbs) live in the separate rustdesk-deploy stack, not here.
 
 services:
-
-  # -------------------------------------------------------------------------
-  # RustDesk / Olidesk relay server
-  # -------------------------------------------------------------------------
-  hbbr:
-    image: rustdesk/rustdesk-server:latest
-    command: hbbr
-    restart: unless-stopped
-    ports:
-      - "21117:21117"
-      - "21119:21119"
-    volumes:
-      - ./data/relay:/root
-    networks:
-      - olidesk
-
-  # -------------------------------------------------------------------------
-  # RustDesk / Olidesk signal / rendezvous server
-  # -------------------------------------------------------------------------
-  hbbs:
-    image: rustdesk/rustdesk-server:latest
-    command: hbbs
-    restart: unless-stopped
-    depends_on:
-      - hbbr
-    ports:
-      - "21115:21115"
-      - "21116:21116"
-      - "21116:21116/udp"
-      - "21118:21118"
-    volumes:
-      - ./data/relay:/root
-    networks:
-      - olidesk
-
-  # -------------------------------------------------------------------------
-  # Olidesk address-book API
-  # -------------------------------------------------------------------------
   olidesk-api:
     build:
-      context: ./olidesk-api
-      dockerfile: Dockerfile
+      context: .
+    image: olidesk-api
+    container_name: olidesk-api
     restart: unless-stopped
     ports:
       - "8443:8443"
     volumes:
-      - ./data/api:/data
-      # Override config at runtime — edit this file on the host, not inside the image.
-      # It's gitignored (holds live tokens); copy config.json.example to config.json
-      # on the host and fill it in before first run.
-      - ./olidesk-api/config.json:/app/config.json:ro
-    environment:
-      - CONFIG_PATH=/app/config.json
-    networks:
-      - olidesk
+      - ./data:/data
+      # Gitignored (holds live tokens) — copy config.json.example to
+      # config.json here and fill it in before first run.
+      - ./config.json:/app/config.json:ro
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8443/health')"]
@@ -66,11 +22,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-networks:
-  olidesk:
-    driver: bridge
-
-volumes:
-  relay-data:
-  api-data:
