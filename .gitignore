@@ -60,3 +60,5 @@ flutter/web/
 # secrets / local tooling, must never be committed
 olidesk-release.jks.b64
 .claude/
+# live server config, holds the admin and deploy tokens — see config.json.example
+olidesk-api/config.json

@@ -51,7 +51,9 @@ services:
       - "8443:8443"
     volumes:
       - ./data/api:/data
-      # Override config at runtime — edit this file on the host, not inside the image
+      # Override config at runtime — edit this file on the host, not inside the image.
+      # It's gitignored (holds live tokens); copy config.json.example to config.json
+      # on the host and fill it in before first run.
       - ./olidesk-api/config.json:/app/config.json:ro
     environment:
       - CONFIG_PATH=/app/config.json

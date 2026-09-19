@@ -21,11 +21,17 @@ launches) and deletes the JSON file. See
 
 ## One-time server setup
 
-1. Set a `deploy_token` in `olidesk-api/config.json` — a random string,
-   separate from the admin `token`. This token can only call
-   `/api/clients/register`; it cannot read, list, or modify anything else
-   in the address book, so it's safe to embed in deployment packages.
-2. Restart the API container so it picks up the new config:
+1. `olidesk-api/config.json` holds the live admin and deploy tokens, so it's
+   gitignored and never committed. On the server, create it once from the
+   example (a `git pull` never touches it after that):
+   ```
+   cp olidesk-api/config.json.example olidesk-api/config.json
+   ```
+2. Fill in real values for `token` (admin) and `deploy_token` — two separate
+   random strings. `deploy_token` can only call `/api/clients/register`; it
+   cannot read, list, or modify anything else in the address book, so it's
+   safe to embed in deployment packages.
+3. Restart the API container so it picks up the config:
    ```
    docker compose restart olidesk-api
    ```
