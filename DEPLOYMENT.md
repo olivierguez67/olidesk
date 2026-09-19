@@ -56,15 +56,24 @@ launches) and deletes the JSON file. See
 
 Where `olidesk-deploy.json` needs to end up depends on which installer
 you're using, because the client reads it from the same folder as its own
-running executable:
+running executable (`Platform.resolvedExecutable`'s parent directory):
 
-- **MSI install**: run the installer normally (installs to
-  `C:\Program Files\Olidesk\` by default), then copy
-  `olidesk-deploy.json` into that same install folder, next to
-  `olidesk.exe`.
+- **MSI install** (the default `--app-name Olidesk` build): the installer
+  always places the app at exactly this literal path:
+  ```
+  C:\Program Files\Olidesk\
+  ```
+  so the deploy config must be here:
+  ```
+  C:\Program Files\Olidesk\olidesk-deploy.json
+  ```
+  Run the MSI first, *then* copy `olidesk-deploy.json` into that folder —
+  copying it there before installing does nothing, since the installer
+  doesn't pick up extra files from wherever you ran it from.
 - **Portable/self-extracting EXE**: copy `olidesk-deploy.json` into the
   same folder as the portable EXE *before* running it, so it's sitting next
-  to it the first time it launches.
+  to it the first time it launches (wherever that folder is — USB stick,
+  network share, etc.).
 
 Then just launch Olidesk. Registration happens silently in the
 background — no UI, nothing to click. If it can't reach the API yet (no
@@ -73,13 +82,32 @@ launch instead of giving up.
 
 ## Verifying / troubleshooting
 
+Every run writes a plain-text log, timestamped line by line: file found or
+not, config parsed or not, whether/when a RustDesk id showed up, the exact
+HTTP request and response. Check it first — it's the fastest way to see
+exactly where things stopped:
+
+- Normally: `C:\Program Files\Olidesk\olidesk-deploy.log`, right next to
+  the JSON file.
+- If that folder isn't writable by the signed-in user (common for a
+  non-admin user under `C:\Program Files`), it falls back to:
+  `%APPDATA%\Olidesk\olidesk-deploy.log`, i.e.
+  `C:\Users\<user>\AppData\Roaming\Olidesk\olidesk-deploy.log`.
+
+Other things to check:
+
 - Once registered, the client appears under the given group in the admin
-  build's address book tab, and `olidesk-deploy.json` is gone from the
-  install folder.
+  build's address book tab, `olidesk-deploy.json` is gone from the install
+  folder, and the log's last line reads "registered successfully".
+- A `olidesk-deploy.json` placed anywhere other than the installed app's
+  own folder is invisible to the client — it just silently does nothing
+  (there's no error for a missing file, by design, since most installs
+  don't have one). This is the most common reason nothing happens: check
+  the literal path above, not just "next to the installer".
 - If a machine never shows up, check that `olidesk-deploy.json` has valid
   `api_url` and `deploy_token` values, that the machine can reach
-  `api_url` over HTTPS, and check the client's debug log for lines starting
-  with `olidesk auto-registration`.
+  `api_url` over HTTPS, and read the log for the exact HTTP status/body the
+  server returned.
 - Re-registering an ID that's already in the address book updates its
   hostname/platform/group in place rather than creating a duplicate, so
   it's safe to reuse the same deploy package if you reinstall a machine.

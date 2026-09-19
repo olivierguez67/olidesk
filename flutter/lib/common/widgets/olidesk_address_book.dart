@@ -8,6 +8,7 @@ import '../../common.dart';
 import '../../models/platform_model.dart';
 import '../../utils/http_service.dart' as http_svc;
 import 'peer_card.dart' show getOnline;
+import 'peers_view.dart' show peerSearchText;
 
 // ---------------------------------------------------------------------------
 // Config keys
@@ -394,10 +395,23 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
     return msg.replaceFirst('Exception: ', '');
   }
 
+  // Reactive to both the group selection and the shared search box in the
+  // peer tab toolbar (same box the Recent/Favorites/Discovered tabs use;
+  // `Obx` picks up `peerSearchText` because it's read here, inside the
+  // builder callback this getter is invoked from).
   List<_AbClient> get _visibleClients {
     final gid = _selectedGroupId.value;
-    if (gid == null) return _clients;
-    return _clients.where((c) => c.groupId == gid).toList();
+    Iterable<_AbClient> list =
+        gid == null ? _clients : _clients.where((c) => c.groupId == gid);
+
+    final query = peerSearchText.value.trim().toLowerCase();
+    if (query.isNotEmpty) {
+      list = list.where((c) =>
+          c.olideskId.toLowerCase().contains(query) ||
+          c.name.toLowerCase().contains(query) ||
+          (c.hostname ?? '').toLowerCase().contains(query));
+    }
+    return list.toList();
   }
 
   // ---------------------------------------------------------------------------

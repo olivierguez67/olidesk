@@ -137,9 +137,6 @@ void runMainApp(bool startService) async {
   // register uni links
   await initEnv(kAppTypeMain);
   checkUpdate();
-  // Fire-and-forget: no-op unless a deployment package dropped
-  // olidesk-deploy.json next to the executable (see olidesk_deploy.dart).
-  unawaited(tryOlideskAutoRegister());
   // trigger connection status updater
   await bind.mainCheckConnectStatus();
   if (startService) {
@@ -147,6 +144,11 @@ void runMainApp(bool startService) async {
     bind.pluginSyncUi(syncTo: kAppTypeMain);
     bind.pluginListReload();
   }
+  // Fire-and-forget: no-op unless a deployment package dropped
+  // olidesk-deploy.json next to the executable (see olidesk_deploy.dart).
+  // Runs after startService() so the background service (and the RustDesk
+  // id it serves over IPC) is already coming up by the time this polls it.
+  unawaited(tryOlideskAutoRegister());
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
