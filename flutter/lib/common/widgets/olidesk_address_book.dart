@@ -956,9 +956,12 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(translate('Delete')),
-        content: Text('Remove "${client.name}" from address book?'),
+        content: Text(
+            'Delete "${client.name}"? This removes it from the address book. '
+            'This cannot be undone.'),
         actions: [
           TextButton(
+            autofocus: true,
             onPressed: () => Navigator.pop(ctx),
             child: Text(translate('Cancel')),
           ),
@@ -979,15 +982,47 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
     );
   }
 
+  // The API's delete_group reparents subgroups and clients to the deleted
+  // group's parent rather than deleting them (see olidesk-api/app.py) --
+  // this message and the counts below need to stay accurate to that.
+  String _groupNameById(int id) {
+    for (final fg in _flattenAll(_groups)) {
+      if (fg.group.id == id) return fg.group.name;
+    }
+    return '';
+  }
+
   void _confirmDeleteGroup(BuildContext context, _AbGroup group) {
+    final subtreeIds = _subtreeIds(group);
+    final subgroupCount = subtreeIds.length - 1;
+    final clientCount = _clients
+        .where((c) => c.groupId != null && subtreeIds.contains(c.groupId))
+        .length;
+    final destination = group.parentId == null
+        ? 'the top level'
+        : '"${_groupNameById(group.parentId!)}"';
+
+    String message;
+    if (subgroupCount == 0 && clientCount == 0) {
+      message = 'Delete "${group.name}"? This cannot be undone.';
+    } else {
+      final parts = <String>[
+        if (clientCount > 0) '$clientCount client${clientCount == 1 ? '' : 's'}',
+        if (subgroupCount > 0)
+          '$subgroupCount subgroup${subgroupCount == 1 ? '' : 's'}',
+      ];
+      message = 'Delete "${group.name}"? ${parts.join(' and ')} inside it '
+          'will be moved to $destination. This cannot be undone.';
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(translate('Delete')),
-        content: Text(
-            'Delete group "${group.name}"? Clients in this group will be unassigned.'),
+        content: Text(message),
         actions: [
           TextButton(
+            autofocus: true,
             onPressed: () => Navigator.pop(ctx),
             child: Text(translate('Cancel')),
           ),
