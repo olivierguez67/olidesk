@@ -16,6 +16,10 @@ with open(CONFIG_PATH) as _f:
     _CONFIG = json.load(_f)
 
 TOKEN = _CONFIG["token"]
+# Separate, narrower-scoped token: only valid for POST /api/clients/register,
+# so a deployment script that leaks this token cannot read or modify the
+# rest of the address book (see require_deploy_auth below).
+DEPLOY_TOKEN = _CONFIG.get("deploy_token")
 DB_PATH = _CONFIG.get("db_path", "/data/address_book.sqlite")
 HOST = _CONFIG.get("host", "0.0.0.0")
 PORT = int(_CONFIG.get("port", 8443))
@@ -98,6 +102,20 @@ def require_auth(f):
     return decorated
 
 
+def require_deploy_auth(f):
+    """Accepts only DEPLOY_TOKEN, never the admin TOKEN. Deliberately not a
+    fallback on top of require_auth: the admin token stays scoped to the
+    admin-facing endpoints, and the deploy token stays scoped to this one."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:] if auth.startswith("Bearer ") else ""
+        if not DEPLOY_TOKEN or token != DEPLOY_TOKEN:
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
 # ---------------------------------------------------------------------------
 # Group helpers
 # ---------------------------------------------------------------------------
@@ -127,6 +145,27 @@ def _is_descendant(db, ancestor_id, candidate_id):
         rows = db.execute("SELECT id FROM groups WHERE parent_id = ?", (current,)).fetchall()
         queue.extend(r["id"] for r in rows)
     return False
+
+
+def _get_or_create_top_level_group(db, name):
+    """Look up a top-level group by name (case-insensitive), creating it if
+    it doesn't exist yet. Used by /api/clients/register so a deployment
+    package's group name ("ASPEN GROUP") just works without the admin having
+    to pre-create it."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    row = db.execute(
+        "SELECT id FROM groups WHERE parent_id IS NULL AND lower(name) = lower(?)",
+        (name,),
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = db.execute(
+        "INSERT INTO groups (name, parent_id, icon, sort_order) VALUES (?, NULL, NULL, 0)",
+        (name,),
+    )
+    return cur.lastrowid
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +397,62 @@ def move_client(client_id):
     db.commit()
     row = db.execute(_CLIENT_SELECT + " WHERE c.id = ?", (client_id,)).fetchone()
     return jsonify(dict(row))
+
+
+@app.route("/api/clients/register", methods=["POST"])
+@require_deploy_auth
+def register_client():
+    """Self-service registration used by freshly deployed clients (see
+    flutter/lib/common/olidesk_deploy.dart). Deliberately narrower than
+    POST /api/clients: no notes/sort_order, and re-registering an existing
+    olidesk_id updates it in place instead of creating a duplicate entry."""
+    data = request.get_json(silent=True) or {}
+    olidesk_id = (data.get("olidesk_id") or "").strip()
+    if not olidesk_id:
+        return jsonify({"error": "olidesk_id is required"}), 400
+
+    hostname = (data.get("hostname") or "").strip() or None
+    platform = (data.get("os") or "").strip() or None
+    group_name = data.get("group")
+
+    db = get_db()
+    group_id = _get_or_create_top_level_group(db, group_name)
+    now = datetime.now(timezone.utc).isoformat()
+
+    existing = db.execute(
+        "SELECT id FROM clients WHERE olidesk_id = ?", (olidesk_id,)
+    ).fetchone()
+
+    if existing:
+        client_id = existing["id"]
+        fields = {"last_seen": now}
+        if hostname:
+            fields["hostname"] = hostname
+            fields["name"] = hostname
+        if platform:
+            fields["platform"] = platform
+        if group_id is not None:
+            fields["group_id"] = group_id
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        db.execute(
+            f"UPDATE clients SET {set_clause} WHERE id = ?",
+            list(fields.values()) + [client_id],
+        )
+        db.commit()
+        status = 200
+    else:
+        cur = db.execute(
+            """INSERT INTO clients
+                   (olidesk_id, name, group_id, hostname, platform, notes, last_seen, sort_order)
+               VALUES (?, ?, ?, ?, ?, NULL, ?, 0)""",
+            (olidesk_id, hostname or olidesk_id, group_id, hostname, platform, now),
+        )
+        db.commit()
+        client_id = cur.lastrowid
+        status = 201
+
+    row = db.execute(_CLIENT_SELECT + " WHERE c.id = ?", (client_id,)).fetchone()
+    return jsonify(dict(row)), status
 
 
 # ---------------------------------------------------------------------------

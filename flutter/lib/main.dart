@@ -24,6 +24,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'common.dart';
+import 'common/olidesk_deploy.dart';
 import 'consts.dart';
 import 'mobile/pages/home_page.dart';
 import 'mobile/pages/server_page.dart';
@@ -136,6 +137,9 @@ void runMainApp(bool startService) async {
   // register uni links
   await initEnv(kAppTypeMain);
   checkUpdate();
+  // Fire-and-forget: no-op unless a deployment package dropped
+  // olidesk-deploy.json next to the executable (see olidesk_deploy.dart).
+  unawaited(tryOlideskAutoRegister());
   // trigger connection status updater
   await bind.mainCheckConnectStatus();
   if (startService) {
