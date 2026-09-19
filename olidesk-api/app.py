@@ -2,8 +2,10 @@ import os
 import json
 import sqlite3
 import logging
+import hashlib
+import secrets
 from functools import wraps
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, jsonify, g
 
@@ -15,6 +17,10 @@ CONFIG_PATH = os.environ.get("CONFIG_PATH", os.path.join(os.path.dirname(__file_
 with open(CONFIG_PATH) as _f:
     _CONFIG = json.load(_f)
 
+# Break-glass recovery credential only — see require_admin_devices_auth.
+# Address-book access (groups/clients) is per-device now; this token cannot
+# reach it. Keep it secret and treat rotating it as a real incident response
+# action, since anyone with it can mint new admin devices.
 TOKEN = _CONFIG["token"]
 # Separate, narrower-scoped token: only valid for POST /api/clients/register,
 # so a deployment script that leaks this token cannot read or modify the
@@ -24,8 +30,28 @@ DB_PATH = _CONFIG.get("db_path", "/data/address_book.sqlite")
 HOST = _CONFIG.get("host", "0.0.0.0")
 PORT = int(_CONFIG.get("port", 8443))
 
+MAX_ADMIN_DEVICES = 4
+REGISTER_RATE_LIMIT = 20
+REGISTER_RATE_WINDOW = timedelta(hours=1)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+# Dedicated, append-only file for every admin auth attempt (success and
+# failure) — separate from the app's own stdout logging so it's easy to
+# find and tail on the server regardless of how gunicorn's logs are set up.
+# Lives next to the database, i.e. under the same ./data bind mount.
+_ADMIN_AUTH_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(DB_PATH)) or ".", "admin_auth.log"
+)
+os.makedirs(os.path.dirname(_ADMIN_AUTH_LOG_PATH), exist_ok=True)
+admin_auth_log = logging.getLogger("admin_auth")
+admin_auth_log.setLevel(logging.INFO)
+admin_auth_log.propagate = False
+if not admin_auth_log.handlers:
+    _admin_auth_handler = logging.FileHandler(_ADMIN_AUTH_LOG_PATH)
+    _admin_auth_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    admin_auth_log.addHandler(_admin_auth_handler)
 
 # ---------------------------------------------------------------------------
 # Database
@@ -53,6 +79,32 @@ CREATE TABLE IF NOT EXISTS clients (
     notes      TEXT,
     last_seen  TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+-- Per-device admin credentials, replacing the single shared admin token.
+-- Only a hash of each token is ever stored; the plaintext is returned once,
+-- at creation time, and never again (see create_admin_device).
+CREATE TABLE IF NOT EXISTS admin_devices (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT    NOT NULL,
+    token_hash   TEXT    NOT NULL UNIQUE,
+    olidesk_id   TEXT,
+    created_at   TEXT    NOT NULL,
+    last_seen_at TEXT,
+    last_ip      TEXT
+);
+
+-- Audit trail for /api/clients/register, and the source of truth for its
+-- rate limit (COUNT(*) over the trailing window beats an in-memory counter,
+-- since gunicorn runs multiple worker processes that don't share memory).
+CREATE TABLE IF NOT EXISTS registration_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL,
+    ip         TEXT,
+    hostname   TEXT,
+    olidesk_id TEXT,
+    group_name TEXT,
+    created_at TEXT NOT NULL
 );
 """
 
@@ -92,24 +144,108 @@ def close_db(exc):
 # Auth
 # ---------------------------------------------------------------------------
 
-def require_auth(f):
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _client_ip() -> str:
+    # The address book API sits behind nginx (see olidesk_address_book.dart's
+    # default URL comment), so prefer the original client IP if forwarded.
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or ""
+
+
+def _log_admin_auth(success: bool, device_name, endpoint: str):
+    admin_auth_log.info(
+        "%s ip=%s device=%s endpoint=%s",
+        "SUCCESS" if success else "FAILURE",
+        _client_ip(),
+        device_name or "-",
+        endpoint,
+    )
+
+
+def _touch_device(db, device_row):
+    db.execute(
+        "UPDATE admin_devices SET last_seen_at = ?, last_ip = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), _client_ip(), device_row["id"]),
+    )
+    db.commit()
+
+
+def _bearer_token() -> str:
+    auth = request.headers.get("Authorization", "")
+    return auth[7:] if auth.startswith("Bearer ") else ""
+
+
+def _current_actor_name() -> str:
+    """Name of whoever require_admin_devices_auth authenticated this request
+    as, for audit logging. None means it was the break-glass token."""
+    device = getattr(g, "admin_device", None)
+    return device["name"] if device is not None else "break-glass"
+
+
+def require_ab_auth(f):
+    """Address-book endpoints (groups/clients): a valid per-device token
+    only. The break-glass TOKEN deliberately does not work here — see
+    require_admin_devices_auth for where it does."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[7:] != TOKEN:
+        token = _bearer_token()
+        db = get_db()
+        device = None
+        if token:
+            device = db.execute(
+                "SELECT * FROM admin_devices WHERE token_hash = ?",
+                (_hash_token(token),),
+            ).fetchone()
+        if not device:
+            _log_admin_auth(False, None, request.path)
             return jsonify({"error": "Unauthorized"}), 401
+        _touch_device(db, device)
+        _log_admin_auth(True, device["name"], request.path)
+        g.admin_device = device
+        return f(*args, **kwargs)
+    return decorated
+
+
+def require_admin_devices_auth(f):
+    """/api/admin/devices endpoints: a valid per-device token, OR the
+    break-glass config token — needed to bootstrap the very first device on
+    a fresh server, and to recover if every device token is lost."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = _bearer_token()
+        if token and TOKEN and token == TOKEN:
+            _log_admin_auth(True, "break-glass", request.path)
+            g.admin_device = None
+            return f(*args, **kwargs)
+        db = get_db()
+        device = None
+        if token:
+            device = db.execute(
+                "SELECT * FROM admin_devices WHERE token_hash = ?",
+                (_hash_token(token),),
+            ).fetchone()
+        if not device:
+            _log_admin_auth(False, None, request.path)
+            return jsonify({"error": "Unauthorized"}), 401
+        _touch_device(db, device)
+        _log_admin_auth(True, device["name"], request.path)
+        g.admin_device = device
         return f(*args, **kwargs)
     return decorated
 
 
 def require_deploy_auth(f):
-    """Accepts only DEPLOY_TOKEN, never the admin TOKEN. Deliberately not a
-    fallback on top of require_auth: the admin token stays scoped to the
-    admin-facing endpoints, and the deploy token stays scoped to this one."""
+    """Accepts only DEPLOY_TOKEN, never an admin credential. Deliberately not
+    a fallback on top of the admin auth decorators: the deploy token stays
+    scoped to this one endpoint."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        token = auth[7:] if auth.startswith("Bearer ") else ""
+        token = _bearer_token()
         if not DEPLOY_TOKEN or token != DEPLOY_TOKEN:
             return jsonify({"error": "Unauthorized"}), 401
         return f(*args, **kwargs)
@@ -173,7 +309,7 @@ def _get_or_create_top_level_group(db, name):
 # ---------------------------------------------------------------------------
 
 @app.route("/api/groups", methods=["GET"])
-@require_auth
+@require_ab_auth
 def get_groups():
     db = get_db()
     rows = db.execute("SELECT id, name, parent_id, icon, sort_order FROM groups").fetchall()
@@ -181,7 +317,7 @@ def get_groups():
 
 
 @app.route("/api/groups", methods=["POST"])
-@require_auth
+@require_ab_auth
 def create_group():
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
@@ -207,7 +343,7 @@ def create_group():
 
 
 @app.route("/api/groups/<int:group_id>", methods=["PUT"])
-@require_auth
+@require_ab_auth
 def update_group(group_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone():
@@ -249,7 +385,7 @@ def update_group(group_id):
 
 
 @app.route("/api/groups/<int:group_id>", methods=["DELETE"])
-@require_auth
+@require_ab_auth
 def delete_group(group_id):
     db = get_db()
     row = db.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
@@ -278,7 +414,7 @@ _CLIENT_SELECT = """
 
 
 @app.route("/api/clients", methods=["GET"])
-@require_auth
+@require_ab_auth
 def get_clients():
     db = get_db()
     group_id = request.args.get("group_id")
@@ -299,7 +435,7 @@ def get_clients():
 
 
 @app.route("/api/clients", methods=["POST"])
-@require_auth
+@require_ab_auth
 def create_client():
     data = request.get_json(silent=True) or {}
     olidesk_id = (data.get("olidesk_id") or "").strip()
@@ -333,7 +469,7 @@ def create_client():
 
 
 @app.route("/api/clients/<int:client_id>", methods=["PUT"])
-@require_auth
+@require_ab_auth
 def update_client(client_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM clients WHERE id = ?", (client_id,)).fetchone():
@@ -370,7 +506,7 @@ def update_client(client_id):
 
 
 @app.route("/api/clients/<int:client_id>", methods=["DELETE"])
-@require_auth
+@require_ab_auth
 def delete_client(client_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM clients WHERE id = ?", (client_id,)).fetchone():
@@ -381,7 +517,7 @@ def delete_client(client_id):
 
 
 @app.route("/api/clients/<int:client_id>/move", methods=["POST"])
-@require_auth
+@require_ab_auth
 def move_client(client_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM clients WHERE id = ?", (client_id,)).fetchone():
@@ -405,7 +541,22 @@ def register_client():
     """Self-service registration used by freshly deployed clients (see
     flutter/lib/common/olidesk_deploy.dart). Deliberately narrower than
     POST /api/clients: no notes/sort_order, and re-registering an existing
-    olidesk_id updates it in place instead of creating a duplicate entry."""
+    olidesk_id updates it in place instead of creating a duplicate entry.
+
+    Rate limited to REGISTER_RATE_LIMIT calls per REGISTER_RATE_WINDOW per
+    deploy token, counted from registration_events (not an in-memory
+    counter, since it has to hold across gunicorn's worker processes)."""
+    db = get_db()
+    token_hash = _hash_token(DEPLOY_TOKEN or "")
+    window_start = (datetime.now(timezone.utc) - REGISTER_RATE_WINDOW).isoformat()
+    recent = db.execute(
+        "SELECT COUNT(*) AS n FROM registration_events WHERE token_hash = ? AND created_at > ?",
+        (token_hash, window_start),
+    ).fetchone()["n"]
+    if recent >= REGISTER_RATE_LIMIT:
+        log.warning("registration rate limit hit, ip=%s", _client_ip())
+        return jsonify({"error": "Too many registrations, try again later"}), 429
+
     data = request.get_json(silent=True) or {}
     olidesk_id = (data.get("olidesk_id") or "").strip()
     if not olidesk_id:
@@ -415,7 +566,6 @@ def register_client():
     platform = (data.get("os") or "").strip() or None
     group_name = data.get("group")
 
-    db = get_db()
     group_id = _get_or_create_top_level_group(db, group_name)
     now = datetime.now(timezone.utc).isoformat()
 
@@ -451,8 +601,89 @@ def register_client():
         client_id = cur.lastrowid
         status = 201
 
+    db.execute(
+        """INSERT INTO registration_events
+               (token_hash, ip, hostname, olidesk_id, group_name, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (token_hash, _client_ip(), hostname, olidesk_id, group_name, now),
+    )
+    db.commit()
+    log.info(
+        "client registered: ip=%s hostname=%s group=%s olidesk_id=%s",
+        _client_ip(), hostname, group_name, olidesk_id,
+    )
+
     row = db.execute(_CLIENT_SELECT + " WHERE c.id = ?", (client_id,)).fetchone()
     return jsonify(dict(row)), status
+
+
+# ---------------------------------------------------------------------------
+# Admin device endpoints
+# ---------------------------------------------------------------------------
+
+_ADMIN_DEVICE_SELECT = (
+    "SELECT id, name, olidesk_id, created_at, last_seen_at, last_ip FROM admin_devices"
+)
+
+
+@app.route("/api/admin/devices", methods=["GET"])
+@require_admin_devices_auth
+def list_admin_devices():
+    db = get_db()
+    rows = db.execute(_ADMIN_DEVICE_SELECT + " ORDER BY created_at").fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/admin/devices", methods=["POST"])
+@require_admin_devices_auth
+def create_admin_device():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    olidesk_id = (data.get("olidesk_id") or "").strip() or None
+
+    db = get_db()
+    count = db.execute("SELECT COUNT(*) AS n FROM admin_devices").fetchone()["n"]
+    if count >= MAX_ADMIN_DEVICES:
+        return jsonify({
+            "error": f"Device limit reached ({MAX_ADMIN_DEVICES}). Revoke one first."
+        }), 403
+
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc).isoformat()
+    cur = db.execute(
+        """INSERT INTO admin_devices
+               (name, token_hash, olidesk_id, created_at, last_seen_at, last_ip)
+           VALUES (?, ?, ?, ?, NULL, NULL)""",
+        (name, _hash_token(token), olidesk_id, now),
+    )
+    db.commit()
+    row = db.execute(_ADMIN_DEVICE_SELECT + " WHERE id = ?", (cur.lastrowid,)).fetchone()
+    result = dict(row)
+    # Returned once, here, and never again — only the hash is persisted.
+    result["token"] = token
+    admin_auth_log.info(
+        "DEVICE_CREATED ip=%s name=%s by=%s",
+        _client_ip(), name, _current_actor_name(),
+    )
+    return jsonify(result), 201
+
+
+@app.route("/api/admin/devices/<int:device_id>", methods=["DELETE"])
+@require_admin_devices_auth
+def delete_admin_device(device_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM admin_devices WHERE id = ?", (device_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    db.execute("DELETE FROM admin_devices WHERE id = ?", (device_id,))
+    db.commit()
+    admin_auth_log.info(
+        "DEVICE_REVOKED ip=%s name=%s by=%s",
+        _client_ip(), row["name"], _current_actor_name(),
+    )
+    return jsonify({"deleted": device_id})
 
 
 # ---------------------------------------------------------------------------

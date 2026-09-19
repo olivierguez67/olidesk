@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -7,6 +8,7 @@ import 'package:get/get.dart';
 import '../../common.dart';
 import '../../models/platform_model.dart';
 import '../../utils/http_service.dart' as http_svc;
+import 'olidesk_admin_devices.dart' show showOlideskAdminDevicesDialog;
 import 'peer_card.dart' show getOnline;
 import 'peers_view.dart' show peerSearchText;
 
@@ -133,6 +135,10 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   final _selectedGroupId = Rx<int?>(null);
   final _loading = false.obs;
   final _error = ''.obs;
+  // Set when the stored token 401s on the address book itself but still
+  // works against /api/admin/devices -- i.e. it's the old shared token,
+  // now break-glass-only. See _load and _migrateThisDevice.
+  final _needsMigration = false.obs;
 
   // Expansion state for the tree view (not reactive — toggled via _treeVer).
   final Set<int> _expanded = {};
@@ -252,12 +258,107 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   Future<void> _load() async {
     _loading.value = true;
     _error.value = '';
+    _needsMigration.value = false;
     try {
       await Future.wait([_fetchGroups(), _fetchClients()]);
     } catch (e) {
-      _error.value = _friendlyError(e);
+      if (e.toString().contains('Unauthorized') && await _probeMigration()) {
+        _needsMigration.value = true;
+      } else {
+        _error.value = _friendlyError(e);
+      }
     } finally {
       _loading.value = false;
+    }
+  }
+
+  // True if the stored token doesn't work for the address book but does
+  // work for /api/admin/devices -- the signature of the old shared token,
+  // still valid as break-glass, no longer valid here.
+  Future<bool> _probeMigration() async {
+    if (_token.isEmpty) return false;
+    try {
+      final resp = await http_svc
+          .get(Uri.parse('$_apiUrl/api/admin/devices'), headers: _headers)
+          .timeout(const Duration(seconds: 8));
+      return resp.statusCode >= 200 && resp.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _migrateThisDevice(BuildContext context) async {
+    final nameCtrl = TextEditingController(text: _hostname());
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Register This Device'),
+        content: TextField(
+          controller: nameCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Device name',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(translate('Cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, nameCtrl.text.trim()),
+            child: const Text('Register'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+
+    try {
+      final myId = await bind.mainGetMyId();
+      // The old token authenticates this call as break-glass -- that's
+      // exactly the case require_admin_devices_auth exists for.
+      final resp = await http_svc
+          .post(
+            Uri.parse('$_apiUrl/api/admin/devices'),
+            headers: _headers,
+            body: jsonEncode({
+              'name': name,
+              if (myId.isNotEmpty) 'olidesk_id': myId,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode >= 400) {
+        String message = 'Request failed (${resp.statusCode})';
+        try {
+          final body = jsonDecode(resp.body);
+          if (body is Map && body['error'] != null) message = body['error'].toString();
+        } catch (_) {}
+        throw Exception(message);
+      }
+      final created = jsonDecode(resp.body) as Map<String, dynamic>;
+      final newToken = created['token'] as String? ?? '';
+      if (newToken.isEmpty) throw Exception('Server did not return a token');
+      // Overwrites the old shared token, which is never used again by this
+      // device -- it stays valid server-side as break-glass regardless.
+      await bind.mainSetLocalOption(key: _kTokenKey, value: newToken);
+      _needsMigration.value = false;
+      _load();
+    } catch (e) {
+      _error.value = _friendlyError(e);
+      _needsMigration.value = false;
+    }
+  }
+
+  String _hostname() {
+    try {
+      return Platform.localHostname;
+    } catch (_) {
+      return '';
     }
   }
 
@@ -428,6 +529,7 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
         Expanded(
           child: Obx(() {
             if (!_isConfigured) return _buildUnconfigured(context);
+            if (_needsMigration.value) return _buildMigrationPrompt(context);
             if (_error.value.isNotEmpty) {
               return _buildError(context);
             }
@@ -570,6 +672,41 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
               icon: const Icon(Icons.settings_outlined, size: 16),
               label: const Text('Configure'),
               onPressed: () => _showSettingsDialog(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMigrationPrompt(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.settings_ethernet,
+                size: 48, color: Theme.of(context).hintColor),
+            const SizedBox(height: 14),
+            Text('This device is using an old shared admin token.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Text(
+              'Register this device to get its own credential. The old '
+              'token keeps working elsewhere until you retire it.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.person_add_alt_1_outlined, size: 16),
+              label: const Text('Register this device'),
+              onPressed: () => _migrateThisDevice(context),
             ),
           ],
         ),
@@ -1077,6 +1214,23 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                   labelText: 'Bearer Token',
                   border: OutlineInputBorder(),
                   isDense: true,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.devices_other, size: 16),
+                  label: const Text('Manage admin devices'),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    showOlideskAdminDevicesDialog(context);
+                  },
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                 ),
               ),
             ],

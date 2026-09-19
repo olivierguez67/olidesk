@@ -28,10 +28,19 @@ launches) and deletes the JSON file. See
    cd olidesk-api
    cp config.json.example config.json
    ```
-2. Fill in real values for `token` (admin) and `deploy_token` — two separate
-   random strings. `deploy_token` can only call `/api/clients/register`; it
-   cannot read, list, or modify anything else in the address book, so it's
-   safe to embed in deployment packages.
+2. Fill in real values for `token` and `deploy_token` — two separate random
+   strings.
+   - `deploy_token` can only call `/api/clients/register`; it cannot read,
+     list, or modify anything else in the address book, so it's safe to
+     embed in deployment packages.
+   - `token` is a **break-glass recovery credential, not a day-to-day admin
+     token**. It can only call `/api/admin/devices` (list/add/revoke admin
+     devices) — it cannot browse or edit the address book itself. Its only
+     job is bootstrapping the first admin device on a fresh server, and
+     recovering access if every device token is ever lost. Store it
+     somewhere safe and separate from normal admin use (a password
+     manager, not a chat message); see "Admin device authentication" below
+     for how day-to-day access actually works.
 3. From inside `olidesk-api/` (where `docker-compose.yml` lives — its build
    context and volume paths are relative to that directory), bring the API
    up:
@@ -40,6 +49,41 @@ launches) and deletes the JSON file. See
    ```
    After a config-only change, `docker compose restart olidesk-api` is
    enough.
+
+## Admin device authentication
+
+Address book access (the admin build's Olidesk Address Book tab) is
+per-device, not a single shared password. Each admin device — a laptop, an
+admin's own install — gets its own token, stored only as a sha256 hash on
+the server; the plaintext is shown exactly once, at creation time.
+
+- **Bootstrapping a fresh server**: with no devices registered yet, open
+  Address Book API Settings → **Manage admin devices** → **Add Device**,
+  and paste the break-glass `token` from `config.json` into the API
+  Settings token field first (it authenticates device-management calls,
+  though never the address book itself). Name the device, copy the token
+  it returns, and paste that into the token field instead — from then on
+  this device uses its own credential.
+- **Adding another admin's device**: from any already-registered device,
+  Manage admin devices → Add Device → give it that person's device a name
+  → copy the token and send it to them to paste into their own API
+  Settings.
+- **Revoking a device**: Manage admin devices → the trash icon next to it.
+  Takes effect immediately — that device's next request 401s.
+- **Hard cap of 4 active devices.** A 5th `Add Device` call is rejected
+  until one is revoked.
+- **Migrating an existing install**: if a device's saved token still shows
+  as the old shared admin token, opening the address book tab now shows
+  "This device is using an old shared admin token" with a **Register this
+  device** button instead of the normal error screen — click it, name the
+  device, and it swaps in a proper per-device token automatically. The old
+  shared token itself keeps working as break-glass; nothing needs to be
+  changed in `config.json`.
+- **Audit log**: every admin auth attempt (address book calls and
+  `/api/admin/devices` calls, success and failure alike) is appended to
+  `olidesk-api/data/admin_auth.log` on the server, one line per attempt
+  with a timestamp, source IP, device name (or `-` for a failed attempt),
+  and endpoint.
 
 ## Building a deploy package
 
@@ -58,7 +102,10 @@ launches) and deletes the JSON file. See
    ```
    `group` is matched case-insensitively against existing top-level groups
    and created automatically if it doesn't exist yet — no need to
-   pre-create it in the address book.
+   pre-create it in the address book. `/api/clients/register` is rate
+   limited to 20 calls per hour per `deploy_token` (429 past that), and
+   every accepted call is logged (IP, hostname, group, timestamp) in the
+   `registration_events` table in the address-book database.
 3. Put the installer and `olidesk-deploy.json` together (USB stick, network
    share, whatever's convenient). One JSON file per group/site — reuse the
    same installer for all of them.
