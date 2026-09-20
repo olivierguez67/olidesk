@@ -401,21 +401,28 @@ UINT __stdcall WriteDeployJson(__in MSIHANDLE hInstall)
     {
         std::wstring installFolder, deviceName, group, apiUrl, deployToken;
 
-        // Fields are joined with U+E000 (Private Use Area) by
+        // Fields are joined with this marker string by
         // WriteDeployJson.SetParam in RustDesk.wxs, not a printable
         // character like ';', since DEVICENAME/GROUP are free text typed
         // into the installer UI and could otherwise collide with the
-        // delimiter.
+        // delimiter. Plain ASCII: a first attempt used U+E000 (Private Use
+        // Area, chosen to be XML-legal and untypeable), but that broke the
+        // WiX build -- U+E000 isn't representable in the MSI database's
+        // default Windows-1252 codepage.
+        static const std::wstring kSep = L"##OLIDESK_SEP##";
         std::wstring all(pwzData ? pwzData : L"");
         std::vector<std::wstring> fields;
         size_t start = 0;
-        for (size_t i = 0; i <= all.size(); i++)
+        while (true)
         {
-            if (i == all.size() || all[i] == (wchar_t)0xE000)
+            size_t pos = all.find(kSep, start);
+            if (pos == std::wstring::npos)
             {
-                fields.push_back(all.substr(start, i - start));
-                start = i + 1;
+                fields.push_back(all.substr(start));
+                break;
             }
+            fields.push_back(all.substr(start, pos - start));
+            start = pos + kSep.size();
         }
 
         if (fields.size() != 5)

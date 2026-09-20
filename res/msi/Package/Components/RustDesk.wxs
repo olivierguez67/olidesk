@@ -41,11 +41,16 @@
 		<Property Id="API_URL" Value="$(var.ApiUrl)" />
 		<Property Id="DEPLOY_TOKEN" Value="$(var.DeployToken)" />
 		<CustomAction Id="SetDefaultDeviceName" Return="check" Property="DEVICENAME" Value="[ComputerName]" />
-		<!-- Fields are joined with U+E000 (Private Use Area), not a printable
-		     character like ';', since DEVICENAME/GROUP are free text typed into
-		     the installer UI and could otherwise collide with the delimiter.
-		     WriteDeployJson (DeployConfig.cpp) splits on the same character. -->
-		<CustomAction Id="WriteDeployJson.SetParam" Return="check" Property="WriteDeployJson" Value="[INSTALLFOLDER_INNER]&#xE000;[DEVICENAME]&#xE000;[GROUP]&#xE000;[API_URL]&#xE000;[DEPLOY_TOKEN]" />
+		<!-- Fields are joined with this marker string rather than a plain
+		     character like ';', since DEVICENAME/GROUP are free text typed
+		     into the installer UI and could otherwise collide with the
+		     delimiter. (A first attempt used U+E000, a Private Use Area
+		     character chosen to be XML-legal and untypeable, but that broke
+		     the build: "characters that are not available in the specified
+		     database code page '1252'". WiX's default MSI database codepage
+		     cannot represent it. Plain ASCII avoids that entirely.)
+		     WriteDeployJson (DeployConfig.cpp) splits on the same string. -->
+		<CustomAction Id="WriteDeployJson.SetParam" Return="check" Property="WriteDeployJson" Value="[INSTALLFOLDER_INNER]##OLIDESK_SEP##[DEVICENAME]##OLIDESK_SEP##[GROUP]##OLIDESK_SEP##[API_URL]##OLIDESK_SEP##[DEPLOY_TOKEN]" />
 		<?endif?>
 
 		<?ifdef ApiUrl?>
