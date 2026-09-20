@@ -22,6 +22,7 @@
 
 #include "pch.h"
 #include <winhttp.h>
+#include <strutil.h>
 #include <string>
 #include <vector>
 #include <sstream>
