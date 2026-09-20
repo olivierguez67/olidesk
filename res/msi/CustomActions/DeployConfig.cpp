@@ -364,8 +364,10 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
             goto LExit;
         }
 
-        // Reached the server successfully -- suppress the "couldn't reach
-        // the server" hint even if it happens to have zero groups so far.
+        // Currently unused by the dialog (see the comment in
+        // DeployConfigDlg.wxs) -- kept set for whenever per-Control
+        // visibility conditions get sorted out, and harmless as an unused
+        // property in the meantime.
         MsiSetPropertyW(hInstall, L"GROUPS_LOADED", L"1");
 
         std::vector<std::wstring> names = ExtractTopLevelGroupNames(body);

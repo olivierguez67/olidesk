@@ -42,10 +42,14 @@
                      button in ../UI/MyInstallDlg.wxs. -->
                 <Control Id="GroupCombo" Type="ComboBox" X="20" Y="120" Width="320" Height="18" Property="GROUP" ComboList="no" Sorted="yes" />
 
-                <Control Id="GroupsHint" Type="Text" X="20" Y="144" Width="320" Height="24" NoPrefix="yes" Text="Could not reach the deployment server to list existing groups. Type a new group name above." Hidden="yes">
-                    <Condition Action="show"><![CDATA[GROUPS_LOADED <> "1"]]></Condition>
-                    <Condition Action="hide"><![CDATA[GROUPS_LOADED = "1"]]></Condition>
-                </Control>
+                <!-- A conditionally shown "server unreachable" hint here would need
+                     WiX v4's real syntax for per Control visibility conditions, which
+                     this codebase has no working precedent for (a first attempt using
+                     WiX v3's Condition Action="show"/"hide" child element form failed
+                     to compile: "unexpected child element 'Condition'"). Skipped
+                     rather than guess again: GroupLabel above already states the
+                     field is free text either way, which is the actual requirement
+                     ("install never blocks"); this was only the nice to have part. -->
             </Dialog>
         </UI>
     </Fragment>
