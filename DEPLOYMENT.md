@@ -6,18 +6,24 @@ a deployed machine to it by hand. Instead, a client can self-register into
 the address book on first launch, under a chosen group, using a small JSON
 config dropped next to the installed app.
 
-This lets you build one deployment package per site/customer — client
-installer + a JSON file naming their group — and have every machine you
-install it on show up in the right place automatically.
+This lets you hand someone a single installer per site/customer and have
+every machine it's installed on show up in the right group automatically —
+no manual address-book entry per machine.
 
 How it works, in short: on first launch the client looks for
 `olidesk-deploy.json` next to its own executable. If found, it waits for
 its RustDesk ID, then calls the address-book API's `/api/clients/register`
-endpoint with that ID, its hostname, OS, and the group name from the file.
-Once registration succeeds it remembers that (so it won't repeat on later
-launches) and deletes the JSON file. See
-`flutter/lib/common/olidesk_deploy.dart` (client) and
+endpoint with that ID, its hostname (or the device name from the file, if
+set), OS, and the group name from the file. Once registration succeeds it
+remembers that (so it won't repeat on later launches) and deletes the JSON
+file. See `flutter/lib/common/olidesk_deploy.dart` (client) and
 `olidesk-api/app.py`'s `register_client` (server) for the implementation.
+
+The Windows MSI writes that JSON file itself, from a device-name/group
+prompt during setup (see "Installing with the MSI's built-in prompt"
+below) — that's the normal path now. The rest of this doc, including
+placing the file by hand, still applies to the portable EXE and to any MSI
+built without the deployment secrets baked in.
 
 ## One-time server setup
 
@@ -85,36 +91,77 @@ the server; the plaintext is shown exactly once, at creation time.
   with a timestamp, source IP, device name (or `-` for a failed attempt),
   and endpoint.
 
-## Building a deploy package
+## Installing with the MSI's built-in prompt (recommended)
+
+The client MSI (`olidesk-client-*.msi`, built by `.github/workflows/client-build.yml`)
+has `api_url` and `deploy_token` baked in at build time — see "Baking the
+API URL and token into the MSI" below — and writes `olidesk-deploy.json`
+itself during setup. There's no separate file to hand-place: download the
+one MSI and install it anywhere.
+
+**Interactive install**: after picking the install folder, a "Deployment
+Configuration" screen appears with:
+- **Device name** — pre-filled with the machine's hostname (`[ComputerName]`),
+  editable.
+- **Client group** — a dropdown fetched live from `GET /api/groups`. Pick an
+  existing group, or just type a new name into the same box — typing a name
+  that doesn't already exist creates it (same case-insensitive top-level
+  match/create behavior as the JSON-based flow below). If the server can't
+  be reached at install time, the dropdown has nothing in it but stays a
+  normal editable field, and a hint explains why — the install never blocks
+  on network access.
+
+Finishing setup writes `olidesk-deploy.json` into the install folder from
+whatever was entered, and first launch registers exactly like the manual
+flow below (same retry-on-failure behavior, same log file).
+
+**Silent install**: both fields are plain MSI properties, settable on the
+command line —
+```
+msiexec /i olidesk-client-1.4.99-x86_64.msi GROUP="ASPEN GROUP" DEVICENAME="Reception PC" /qn
+```
+Omit `DEVICENAME` and it still defaults to the hostname; omit `GROUP` and
+the client registers with no group. `/qn` skips all UI, including the
+groups dropdown, but `olidesk-deploy.json` still gets written from whatever
+properties were passed (or defaulted).
+
+This only applies to the MSI. The portable/self-extracting EXE has no
+installer UI to add a prompt to, and an admin-build MSI never gets one
+either (`api_url`/`deploy_token` are only baked in for the client build) —
+both use the manual approach below.
+
+## Manual: placing olidesk-deploy.json by hand
+
+For the portable EXE, an MSI built without deployment secrets baked in, or
+any other case where the built-in prompt isn't available.
 
 1. Get the client installer for the version you want to deploy — either
-   download it from the GitHub release for that tag (`olidesk-client-*.msi`
-   or `olidesk-client-*.exe`), or build it yourself with
-   `build.py --client` (see `.github/workflows/client-build.yml` for the
-   exact flags per platform).
+   download it from the GitHub release for that tag, or build it yourself
+   with `build.py --client` (see `.github/workflows/client-build.yml` for
+   the exact flags per platform).
 2. Create `olidesk-deploy.json`:
    ```json
    {
      "api_url": "https://olidesk.olisys.co.il",
      "deploy_token": "<the deploy_token from config.json>",
-     "group": "ASPEN GROUP"
+     "group": "ASPEN GROUP",
+     "device_name": "Reception PC"
    }
    ```
    `group` is matched case-insensitively against existing top-level groups
    and created automatically if it doesn't exist yet — no need to
-   pre-create it in the address book. `/api/clients/register` is rate
-   limited to 20 calls per hour per `deploy_token` (429 past that), and
-   every accepted call is logged (IP, hostname, group, timestamp) in the
-   `registration_events` table in the address-book database.
+   pre-create it in the address book. `device_name` is optional; the client
+   falls back to its own hostname when it's absent. `/api/clients/register`
+   is rate limited to 20 calls per hour per `deploy_token` (429 past that),
+   and every accepted call is logged (IP, hostname, group, timestamp) in
+   the `registration_events` table in the address-book database.
 3. Put the installer and `olidesk-deploy.json` together (USB stick, network
    share, whatever's convenient). One JSON file per group/site — reuse the
    same installer for all of them.
 
-## Installing on a machine
-
-Where `olidesk-deploy.json` needs to end up depends on which installer
-you're using, because the client reads it from the same folder as its own
-running executable (`Platform.resolvedExecutable`'s parent directory):
+Where the file needs to end up depends on which installer you're using,
+because the client reads it from the same folder as its own running
+executable (`Platform.resolvedExecutable`'s parent directory):
 
 - **MSI install** (the default `--app-name Olidesk` build): the installer
   always places the app at exactly this literal path:
@@ -127,7 +174,9 @@ running executable (`Platform.resolvedExecutable`'s parent directory):
   ```
   Run the MSI first, *then* copy `olidesk-deploy.json` into that folder —
   copying it there before installing does nothing, since the installer
-  doesn't pick up extra files from wherever you ran it from.
+  doesn't pick up extra files from wherever you ran it from. (Not a
+  concern with the built-in prompt above, which writes the file itself
+  after the install folder is created.)
 - **Portable/self-extracting EXE**: copy `olidesk-deploy.json` into the
   same folder as the portable EXE *before* running it, so it's sitting next
   to it the first time it launches (wherever that folder is — USB stick,
@@ -137,6 +186,23 @@ Then just launch Olidesk. Registration happens silently in the
 background — no UI, nothing to click. If it can't reach the API yet (no
 network on first boot, DNS not ready, etc.), it just retries on the next
 launch instead of giving up.
+
+## Baking the API URL and token into the MSI
+
+`client-build.yml`'s "Build MSI" step passes `--api-url` and
+`--deploy-token` to `res/msi/preprocess.py`, which only then defines the
+WiX variables (`ApiUrl`/`DeployToken`) that
+`res/msi/Package/UI/DeployConfigDlg.wxs` and the device-registration custom
+actions (`res/msi/CustomActions/DeployConfig.cpp`) are gated behind via
+`<?ifdef ApiUrl?>` — omit either flag (as the admin build's workflow does)
+and the MSI compiles exactly as it did before this feature existed, no
+prompt, no baked-in token.
+
+The workflow reads the token from a **`OLIDESK_DEPLOY_TOKEN` repo secret**,
+which needs to be added under Settings → Secrets and variables → Actions
+before this works — its value should be the same `deploy_token` set in
+`olidesk-api/config.json`. `api_url` isn't secret and is passed as a
+literal in the workflow.
 
 ## Verifying / troubleshooting
 

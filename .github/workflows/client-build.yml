@@ -179,9 +179,11 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build MSI
+        env:
+          OLIDESK_DEPLOY_TOKEN: ${{ secrets.OLIDESK_DEPLOY_TOKEN }}
         run: |
           pushd ./res/msi
-          python preprocess.py --arp -d ../../rustdesk --app-name Olidesk
+          python preprocess.py --arp -d ../../rustdesk --app-name Olidesk --api-url https://olidesk.olisys.co.il --deploy-token "$OLIDESK_DEPLOY_TOKEN"
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           mv ./Package/bin/x64/Release/en-us/Package.msi ../../SignOutput/olidesk-client-${{ env.VERSION }}-x86_64.msi

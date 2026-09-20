@@ -31,6 +31,29 @@
 		<CustomAction Id="TryDeleteStartupShortcut.SetParam" Return="check" Property="ShortcutName" Value="$(var.Product) Tray" />
 		<CustomAction Id="RemoveAmyuniIdd.SetParam" Return="check" Property="RemoveAmyuniIdd" Value="[INSTALLFOLDER_INNER]" />
 		<CustomAction Id="InstallPrinter.SetParam" Return="check" Property="InstallPrinter" Value="[INSTALLFOLDER_INNER]" />
+
+		<?ifdef ApiUrl?>
+		<!-- Deployment device-registration prompt (client build only). ApiUrl/
+		     DeployToken are compile-time constants baked in by preprocess.py
+		     (see Includes.wxi); DEVICENAME and GROUP are all-uppercase so they're
+		     also settable from the command line for silent installs, e.g.
+		     msiexec /i olidesk.msi GROUP="ASPEN GROUP" DEVICENAME="Reception PC" /qn -->
+		<Property Id="API_URL" Value="$(var.ApiUrl)" />
+		<Property Id="DEPLOY_TOKEN" Value="$(var.DeployToken)" />
+		<CustomAction Id="SetDefaultDeviceName" Return="check" Property="DEVICENAME" Value="[ComputerName]" />
+		<!-- Fields are joined with U+E000 (Private Use Area), not a printable
+		     character like ';', since DEVICENAME/GROUP are free text typed into
+		     the installer UI and could otherwise collide with the delimiter.
+		     WriteDeployJson (DeployConfig.cpp) splits on the same character. -->
+		<CustomAction Id="WriteDeployJson.SetParam" Return="check" Property="WriteDeployJson" Value="[INSTALLFOLDER_INNER]&#xE000;[DEVICENAME]&#xE000;[GROUP]&#xE000;[API_URL]&#xE000;[DEPLOY_TOKEN]" />
+		<?endif?>
+
+		<?ifdef ApiUrl?>
+		<InstallUISequence>
+			<Custom Action="SetDefaultDeviceName" Before="AppSearch" Condition="NOT DEVICENAME" />
+		</InstallUISequence>
+		<?endif?>
+
 		<InstallExecuteSequence>
 
 			<Custom Action="SetPropertyIsServiceRunning" After="InstallInitialize" Condition="Installed" />
@@ -76,6 +99,14 @@
 			<Custom Action="AddFirewallRules.SetParam" Before="AddFirewallRules" Condition="NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE)"/>
 
 			<Custom Action="AddRegSoftwareSASGeneration" Before="InstallFinalize" Condition="NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE) AND (NOT CC_CONNECTION_TYPE=&quot;outgoing&quot;)"/>
+
+			<?ifdef ApiUrl?>
+			<!-- Also cover silent installs (msiexec /qn), which never run
+			     InstallUISequence and so never hit the copy of this in there. -->
+			<Custom Action="SetDefaultDeviceName" Before="AppSearch" Condition="NOT DEVICENAME" />
+			<Custom Action="WriteDeployJson" After="InstallFiles" Condition="NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE)" />
+			<Custom Action="WriteDeployJson.SetParam" Before="WriteDeployJson" Condition="NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE)" />
+			<?endif?>
 
 			<Custom Action="RemoveRuntimeGeneratedFiles" Before="RemoveFiles" Condition="Installed AND (REMOVE=&quot;ALL&quot; OR UPGRADINGPRODUCTCODE)"/>
 			<Custom Action="RemoveRuntimeGeneratedFiles.SetParam" Before="RemoveRuntimeGeneratedFiles" Condition="Installed AND (REMOVE=&quot;ALL&quot; OR UPGRADINGPRODUCTCODE)"/>

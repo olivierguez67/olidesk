@@ -88,6 +88,23 @@ def make_parser():
         default="PURSLANE",
         help="The app manufacturer.",
     )
+    parser.add_argument(
+        "--api-url",
+        type=str,
+        default="",
+        help="Olidesk deploy API URL to bake into the installer for the "
+             "device-registration prompt. Leave unset (with --deploy-token) "
+             "to build a plain installer without that prompt, e.g. for the "
+             "admin build.",
+    )
+    parser.add_argument(
+        "--deploy-token",
+        type=str,
+        default="",
+        help="Olidesk deploy API token to bake into the installer, paired "
+             "with --api-url. Never log or print this; only pass it via a "
+             "CI secret.",
+    )
     return parser
 
 
@@ -150,6 +167,15 @@ def gen_auto_component(app_name, dist_dir):
     )
 
 
+def _xml_attr_escape(value):
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def gen_pre_vars(args, dist_dir):
     def func(lines, index_start):
         upgrade_code = uuid.uuid5(uuid.NAMESPACE_OID, app_name + ".exe")
@@ -169,6 +195,21 @@ def gen_pre_vars(args, dist_dir):
             f"{indent}<!-- The UpgradeCode must be consistent for each product. ! -->\n"
             f'{indent}<?define UpgradeCode = "{upgrade_code}" ?>\n',
         ]
+
+        # Only defined when both are given (client builds, via --api-url and
+        # --deploy-token). Package/UI/DeployConfigDlg.wxs and the device-
+        # registration custom actions are entirely gated behind `<?ifdef
+        # ApiUrl?>`, so a build that doesn't pass these (e.g. the admin
+        # build) compiles to exactly the installer it did before this
+        # feature existed -- no dialog, no baked-in token.
+        if args.api_url and args.deploy_token:
+            to_insert_lines.append("\n")
+            to_insert_lines.append(
+                f'{indent}<?define ApiUrl="{_xml_attr_escape(args.api_url)}" ?>\n'
+            )
+            to_insert_lines.append(
+                f'{indent}<?define DeployToken="{_xml_attr_escape(args.deploy_token)}" ?>\n'
+            )
 
         for i, line in enumerate(to_insert_lines):
             lines.insert(index_start + i + 1, line)

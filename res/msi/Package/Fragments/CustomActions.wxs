@@ -19,5 +19,12 @@
 		<CustomAction Id="RemoveAmyuniIdd" DllEntry="RemoveAmyuniIdd" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
 		<CustomAction Id="InstallPrinter" DllEntry="InstallPrinter" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
 		<CustomAction Id="UninstallPrinter" DllEntry="UninstallPrinter" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
+
+		<?ifdef ApiUrl?>
+		<!-- Deployment device-registration prompt (client build only); see
+		     Package/UI/DeployConfigDlg.wxs and CustomActions/DeployConfig.cpp. -->
+		<CustomAction Id="FetchGroups" DllEntry="FetchGroups" Impersonate="yes" Execute="immediate" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
+		<CustomAction Id="WriteDeployJson" DllEntry="WriteDeployJson" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
+		<?endif?>
 	</Fragment>
 </Wix>

@@ -15,6 +15,14 @@ import '../utils/http_service.dart' as http_svc;
 // machine. See olidesk-api/app.py's /api/clients/register for the server
 // side.
 //
+// The Windows MSI writes this file itself, from its device-registration
+// prompt (see res/msi/CustomActions/DeployConfig.cpp and
+// res/msi/Package/UI/DeployConfigDlg.wxs) -- `device_name` is the name
+// typed into that prompt (or the msiexec DEVICENAME property for a silent
+// install), used here as the hostname sent to the server if present,
+// falling back to Platform.localHostname when it's absent (e.g. a
+// hand-written olidesk-deploy.json that predates that field).
+//
 // Everything here writes to a plain-text log (see _log below) because this
 // runs in a release build with no attached console -- debugPrint alone would
 // be invisible. Check that log first when a machine doesn't show up.
@@ -79,6 +87,7 @@ Future<void> tryOlideskAutoRegister() async {
         .replaceAll(RegExp(r'/+$'), '');
     final deployToken = ((config['deploy_token'] as String?) ?? '').trim();
     final group = ((config['group'] as String?) ?? '').trim();
+    final deviceName = ((config['device_name'] as String?) ?? '').trim();
 
     if (apiUrl.isEmpty || deployToken.isEmpty) {
       await _log(
@@ -97,7 +106,7 @@ Future<void> tryOlideskAutoRegister() async {
 
     final body = jsonEncode({
       'olidesk_id': olideskId,
-      'hostname': _hostname(),
+      'hostname': deviceName.isNotEmpty ? deviceName : _hostname(),
       'os': _osName(),
       if (group.isNotEmpty) 'group': group,
     });
