@@ -183,7 +183,12 @@ jobs:
           OLIDESK_DEPLOY_TOKEN: ${{ secrets.OLIDESK_DEPLOY_TOKEN }}
         run: |
           pushd ./res/msi
-          python preprocess.py --arp -d ../../rustdesk --app-name Olidesk --api-url https://olidesk.olisys.co.il --deploy-token "$OLIDESK_DEPLOY_TOKEN"
+          # This step has no `shell:` override, so it runs under PowerShell on
+          # this windows-2022 runner (see the sibling "Build Olidesk client"
+          # step's PowerShell cmdlets) -- "$OLIDESK_DEPLOY_TOKEN" is bash
+          # syntax and silently expands to empty here. $env:OLIDESK_DEPLOY_TOKEN
+          # is the correct PowerShell form.
+          python preprocess.py --arp -d ../../rustdesk --app-name Olidesk --api-url https://olidesk.olisys.co.il --deploy-token "$env:OLIDESK_DEPLOY_TOKEN"
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           mv ./Package/bin/x64/Release/en-us/Package.msi ../../SignOutput/olidesk-client-${{ env.VERSION }}-x86_64.msi

@@ -202,6 +202,19 @@ def gen_pre_vars(args, dist_dir):
         # ApiUrl?>`, so a build that doesn't pass these (e.g. the admin
         # build) compiles to exactly the installer it did before this
         # feature existed -- no dialog, no baked-in token.
+        #
+        # Diagnostic: lengths only, never the token itself, so this is safe
+        # to leave in CI logs permanently. If deploy_token_len is 0 here,
+        # ApiUrl/DeployToken will NOT be defined and the dialog/custom
+        # actions will silently compile out -- check how --deploy-token was
+        # actually invoked (shell quoting/expansion), not just whether the
+        # secret itself has a value.
+        print(
+            f"[preprocess.py] api_url_len={len(args.api_url)} "
+            f"deploy_token_len={len(args.deploy_token)} "
+            f"-> ApiUrl/DeployToken will be "
+            f"{'DEFINED' if (args.api_url and args.deploy_token) else 'UNDEFINED'}"
+        )
         if args.api_url and args.deploy_token:
             to_insert_lines.append("\n")
             to_insert_lines.append(
