@@ -3,17 +3,21 @@
 //
 //  - FetchGroups: immediate CA, runs when "Next" is clicked on
 //    MyInstallDirDlg (before DeployConfigDlg is shown). GETs
-//    {API_URL}/api/groups with the baked-in deploy token and populates the
-//    GROUP combo box's ComboBox table rows at runtime. Never blocks or
-//    fails the install: on any error (unreachable server, timeout, bad
-//    response) it just logs and leaves the combo box empty, which is still
-//    a usable free-text field since it isn't list-restricted.
+//    {API_URL}/api/deploy/groups with the baked-in deploy token and
+//    populates the GROUP combo box's ComboBox table rows at runtime. Not
+//    /api/groups: that's the admin endpoint, gated by per-device admin
+//    auth, and 401s for a deploy token. Never blocks or fails the install:
+//    on any error (unreachable server, timeout, bad response) it just
+//    logs and leaves the combo box empty, which is still a usable
+//    free-text field since it isn't list-restricted.
 //
 //  - WriteDeployJson: deferred CA, runs after InstallFiles. Writes
 //    olidesk-deploy.json into the install folder from DEVICENAME, GROUP,
 //    and the baked-in API_URL/DEPLOY_TOKEN, so the app can self-register on
 //    first launch (flutter/lib/common/olidesk_deploy.dart) instead of
-//    needing that file dropped in by hand after install.
+//    needing that file dropped in by hand after install. Refuses to write
+//    a GROUP value that looks like an unresolved MSI ComboBox placeholder
+//    ("#TEMPnnnn") -- see the comment where it's checked below.
 //
 // Both are compiled in only when the installer was built with
 // --api-url/--deploy-token (see ../preprocess.py and the `<?ifdef ApiUrl?>`
@@ -118,54 +122,33 @@ bool ParseJsonStringLiteral(const std::string& s, size_t& i, std::string& out)
     return false; // unterminated string
 }
 
-void SkipWhitespace(const std::string& s, size_t& i)
+// Extracts every top-level JSON string from a flat array like
+// ["Group A","Group B"], which is exactly what GET /api/deploy/groups
+// returns (see list_deploy_groups in olidesk-api/app.py): plain top-level
+// group names, no nesting, no other fields. A simple "every string
+// literal is a value" scan is correct for that shape without needing a
+// general-purpose parser.
+std::vector<std::wstring> ExtractJsonStringArray(const std::string& json)
 {
-    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
-}
-
-// Extracts the "name" value of every JSON object at brace-depth 1 inside
-// the root array returned by GET /api/groups -- i.e. top-level groups
-// only, deliberately ignoring nested "children". The register endpoint
-// (see olidesk-api/app.py's _get_or_create_top_level_group) only ever
-// resolves a group name against top-level groups, so listing subgroups
-// here would just be misleading.
-std::vector<std::wstring> ExtractTopLevelGroupNames(const std::string& json)
-{
-    std::vector<std::wstring> names;
+    std::vector<std::wstring> values;
     size_t i = 0;
-    int braceDepth = 0;
-
     while (i < json.size())
     {
-        char c = json[i];
-        if (c == '"')
+        if (json[i] == '"')
         {
             std::string value;
             if (!ParseJsonStringLiteral(json, i, value))
             {
                 break; // malformed; keep whatever we already found
             }
-            if (value == "name" && braceDepth == 1)
-            {
-                SkipWhitespace(json, i);
-                if (i < json.size() && json[i] == ':')
-                {
-                    i++;
-                    SkipWhitespace(json, i);
-                    std::string nameValue;
-                    if (ParseJsonStringLiteral(json, i, nameValue))
-                    {
-                        names.push_back(Utf8ToWide(nameValue));
-                    }
-                }
-            }
-            continue;
+            values.push_back(Utf8ToWide(value));
         }
-        if (c == '{') braceDepth++;
-        else if (c == '}') braceDepth--;
-        i++;
+        else
+        {
+            i++;
+        }
     }
-    return names;
+    return values;
 }
 
 std::wstring JsonEscape(const std::wstring& in)
@@ -202,12 +185,16 @@ std::wstring JsonEscape(const std::wstring& in)
 // ---------------------------------------------------------------------
 
 // Returns true and fills outBody (UTF-8) on HTTP 200; false on anything
-// else (unreachable, timeout, TLS failure, non-200, ...). Bounded
-// timeouts so a dead or slow server can never hang the installer --
-// "install never blocks" is the whole point of the fallback requirement.
-bool HttpsGetJson(const std::wstring& url, const std::wstring& bearerToken, std::string& outBody)
+// else (unreachable, timeout, TLS failure, non-200, ...). outStatusCode is
+// always set when a response was received at all (0 if the request never
+// got that far, e.g. DNS/connect failure) and is always logged, success
+// or failure, so a 401/403/etc is visible without needing to reproduce it.
+// Bounded timeouts so a dead or slow server can never hang the installer
+// -- "install never blocks" is the whole point of the fallback requirement.
+bool HttpsGetJson(const std::wstring& url, const std::wstring& bearerToken, std::string& outBody, DWORD& outStatusCode)
 {
     bool ok = false;
+    outStatusCode = 0;
 
     URL_COMPONENTS urlComp;
     ZeroMemory(&urlComp, sizeof(urlComp));
@@ -269,6 +256,9 @@ bool HttpsGetJson(const std::wstring& url, const std::wstring& bearerToken, std:
         WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_FLAG_NUMBER | WINHTTP_QUERY_STATUS_CODE,
             WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX);
 
+        outStatusCode = statusCode;
+        WcaLog(LOGMSG_STANDARD, "FetchGroups: HTTP status %lu", statusCode);
+
         if (statusCode == 200)
         {
             std::string body;
@@ -288,10 +278,6 @@ bool HttpsGetJson(const std::wstring& url, const std::wstring& bearerToken, std:
             } while (available > 0);
             outBody = body;
             ok = true;
-        }
-        else
-        {
-            WcaLog(LOGMSG_STANDARD, "FetchGroups: HTTP status %lu", statusCode);
         }
     }
     else
@@ -369,7 +355,10 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
     // exit path below (including the early "not configured"/"unreachable"
     // ones) leaves the combo box looking genuinely empty rather than
     // showing one blank selectable item.
-    ClearComboBoxRows(hInstall, L"GROUP");
+    if (!ClearComboBoxRows(hInstall, L"GROUP"))
+    {
+        WcaLog(LOGMSG_STANDARD, "FetchGroups: failed to clear the GROUP combo box placeholder.");
+    }
 
     {
         wchar_t apiUrl[1024] = { 0 };
@@ -386,11 +375,16 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
             goto LExit;
         }
 
-        std::wstring url = std::wstring(apiUrl) + L"/api/groups";
+        // Not /api/groups: that's the admin endpoint, gated by per-device
+        // admin auth, and 401s for a deploy token.
+        std::wstring url = std::wstring(apiUrl) + L"/api/deploy/groups";
         std::string body;
-        if (!HttpsGetJson(url, deployToken, body))
+        DWORD statusCode = 0;
+        if (!HttpsGetJson(url, deployToken, body, statusCode))
         {
-            WcaLog(LOGMSG_STANDARD, "FetchGroups: could not reach the server, falling back to free text.");
+            WcaLog(LOGMSG_STANDARD,
+                "FetchGroups: could not reach the server (HTTP status %lu), falling back to free text.",
+                statusCode);
             goto LExit;
         }
 
@@ -400,13 +394,17 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
         // property in the meantime.
         MsiSetPropertyW(hInstall, L"GROUPS_LOADED", L"1");
 
-        std::vector<std::wstring> names = ExtractTopLevelGroupNames(body);
+        std::vector<std::wstring> names = ExtractJsonStringArray(body);
         WcaLog(LOGMSG_STANDARD, "FetchGroups: got %zu group(s).", names.size());
 
         int order = 1;
         for (const auto& name : names)
         {
-            InsertComboBoxRow(hInstall, L"GROUP", order++, name);
+            if (!InsertComboBoxRow(hInstall, L"GROUP", order, name))
+            {
+                WcaLog(LOGMSG_STANDARD, "FetchGroups: failed to insert group row %d ('%ls').", order, name.c_str());
+            }
+            order++;
         }
     }
 
@@ -476,6 +474,20 @@ UINT __stdcall WriteDeployJson(__in MSIHANDLE hInstall)
         {
             WcaLog(LOGMSG_STANDARD, "WriteDeployJson: API_URL or DEPLOY_TOKEN is empty, aborting.");
             goto LExit;
+        }
+
+        // "#TEMPnnnn" is Windows Installer's internal placeholder name for
+        // an unresolved ComboBox item, and has leaked through into GROUP as
+        // a real (bogus) value before (an empty/whitespace ListItem Text
+        // rendering as this instead of blank). Whatever the exact cause,
+        // never let it reach the JSON or the server as a real group name --
+        // treat it the same as GROUP never having been set.
+        if (group.rfind(L"#TEMP", 0) == 0)
+        {
+            WcaLog(LOGMSG_STANDARD,
+                "WriteDeployJson: GROUP looked like an MSI placeholder ('%ls'), treating as empty.",
+                group.c_str());
+            group.clear();
         }
 
         std::wstringstream json;

@@ -36,9 +36,11 @@ built without the deployment secrets baked in.
    ```
 2. Fill in real values for `token` and `deploy_token` — two separate random
    strings.
-   - `deploy_token` can only call `/api/clients/register`; it cannot read,
-     list, or modify anything else in the address book, so it's safe to
-     embed in deployment packages.
+   - `deploy_token` can only call `/api/clients/register` and the
+     read-only `/api/deploy/groups` (group names only, used to populate
+     the installer's group dropdown); it cannot read, list, or modify
+     anything else in the address book, so it's safe to embed in
+     deployment packages.
    - `token` is a **break-glass recovery credential, not a day-to-day admin
      token**. It can only call `/api/admin/devices` (list/add/revoke admin
      devices) — it cannot browse or edit the address book itself. Its only
@@ -103,8 +105,10 @@ one MSI and install it anywhere.
 Configuration" screen appears with:
 - **Device name** — pre-filled with the machine's hostname (`[ComputerName]`),
   editable.
-- **Client group** — a dropdown fetched live from `GET /api/groups`. Pick an
-  existing group, or just type a new name into the same box — typing a name
+- **Client group** — a dropdown fetched live from `GET /api/deploy/groups`
+  (a deploy-token-scoped, names-only endpoint; the admin `/api/groups`
+  requires a per-device admin credential and 401s for a deploy token).
+  Pick an existing group, or just type a new name into the same box — typing a name
   that doesn't already exist creates it (same case-insensitive top-level
   match/create behavior as the JSON-based flow below). If the server can't
   be reached at install time, the dropdown has nothing in it but stays a

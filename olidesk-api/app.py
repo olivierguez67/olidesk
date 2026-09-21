@@ -617,6 +617,25 @@ def register_client():
     return jsonify(dict(row)), status
 
 
+@app.route("/api/deploy/groups", methods=["GET"])
+@require_deploy_auth
+def list_deploy_groups():
+    """Read-only group name list for the installer's device-registration
+    prompt (see FetchGroups in res/msi/CustomActions/DeployConfig.cpp).
+    Deliberately minimal -- just top-level group names, nothing a leaked
+    deploy token could use to enumerate clients, IDs, or the group tree.
+
+    /api/groups (the admin endpoint) 401s for a deploy token now that
+    address-book access is per-device (require_ab_auth); this is the
+    deploy-token-scoped equivalent for exactly the one thing the installer
+    needs."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT name FROM groups WHERE parent_id IS NULL ORDER BY lower(name)"
+    ).fetchall()
+    return jsonify([r["name"] for r in rows])
+
+
 # ---------------------------------------------------------------------------
 # Admin device endpoints
 # ---------------------------------------------------------------------------

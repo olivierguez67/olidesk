@@ -86,7 +86,7 @@ Future<void> tryOlideskAutoRegister() async {
         .trim()
         .replaceAll(RegExp(r'/+$'), '');
     final deployToken = ((config['deploy_token'] as String?) ?? '').trim();
-    final group = ((config['group'] as String?) ?? '').trim();
+    var group = ((config['group'] as String?) ?? '').trim();
     final deviceName = ((config['device_name'] as String?) ?? '').trim();
 
     if (apiUrl.isEmpty || deployToken.isEmpty) {
@@ -94,6 +94,20 @@ Future<void> tryOlideskAutoRegister() async {
           '$_kDeployFileName is missing api_url or deploy_token, aborting');
       return;
     }
+
+    // "#TEMPnnnn" is Windows Installer's internal placeholder name for an
+    // unresolved ComboBox item; it's leaked into GROUP as a real (bogus)
+    // value from the installer's device-registration prompt before. The
+    // installer itself now guards against writing it (see WriteDeployJson
+    // in res/msi/CustomActions/DeployConfig.cpp), but a hand-written or
+    // older olidesk-deploy.json could still carry one, so refuse it here
+    // too rather than ever send it on to the server.
+    if (group.startsWith('#TEMP')) {
+      await _log(
+          'group "$group" looks like an MSI placeholder, treating as empty');
+      group = '';
+    }
+
     await _log('config ok: api_url=$apiUrl group=${group.isEmpty ? '(none)' : group}');
 
     await _log('waiting for a RustDesk id (up to ${_kIdWaitAttempts}s)...');
