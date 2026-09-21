@@ -8,27 +8,37 @@ import '../models/platform_model.dart';
 import '../utils/http_service.dart' as http_svc;
 
 // ---------------------------------------------------------------------------
-// Auto-registration from a deployment config dropped next to the installed
-// executable (`olidesk-deploy.json`). Lets a per-site deployment package
-// (client exe + json naming the site's group) register itself into the
-// address book on first launch, instead of a manual address-book entry per
-// machine. See olidesk-api/app.py's /api/clients/register for the server
-// side.
+// Device registration — silent path (this file) and interactive path
+// (widgets/olidesk_register_device.dart), both talking to
+// olidesk-api/app.py's /api/clients/register.
 //
-// The Windows MSI writes this file itself, from its device-registration
-// prompt (see res/msi/CustomActions/DeployConfig.cpp and
-// res/msi/Package/UI/DeployConfigDlg.wxs) -- `device_name` is the name
-// typed into that prompt (or the msiexec DEVICENAME property for a silent
-// install), used here as the hostname sent to the server if present,
-// falling back to Platform.localHostname when it's absent (e.g. a
-// hand-written olidesk-deploy.json that predates that field).
+// The silent path reads a deployment config dropped next to the installed
+// executable (`olidesk-deploy.json`). The Windows MSI writes this file
+// itself when a silent install passes ENROLLCODE (and optionally GROUP/
+// DEVICENAME) as msiexec properties (see
+// res/msi/CustomActions/DeployConfig.cpp); a plain interactive install
+// with no such properties gets no file, and no attempt is made here --
+// the interactive "Register this device" dialog handles that case
+// entirely (see main.dart, which calls tryOlideskAutoRegister() followed
+// by maybeShowOlideskRegisterDialog()).
 //
-// Everything here writes to a plain-text log (see _log below) because this
-// runs in a release build with no attached console -- debugPrint alone would
-// be invisible. Check that log first when a machine doesn't show up.
+// Older versions of this installer baked a long-lived DEPLOY_TOKEN into
+// every client MSI and drove the whole flow (device name, group, network
+// call) from an installer-side dialog. That's gone: no secret of any kind
+// ships in a public installer now. enroll_code here is a short-lived
+// (24h), revocable, per-deployment-batch code minted from the admin app
+// (see ENROLL_CODE_TTL and /api/admin/enrollment-codes in
+// olidesk-api/app.py) -- treat it like a credential (never logged) but
+// not like a long-term secret.
+//
+// Everything here writes to a plain-text log (see logOlideskDeploy below)
+// because this runs in a release build with no attached console --
+// debugPrint alone would be invisible. Check that log first when a
+// machine doesn't show up.
 // ---------------------------------------------------------------------------
 
-const _kRegisteredOptionKey = 'olidesk-deploy-registered';
+const kOlideskRegisteredOptionKey = 'olidesk-deploy-registered';
+const kOlideskDefaultApiUrl = 'https://olidesk.olisys.co.il';
 const _kDeployFileName = 'olidesk-deploy.json';
 const _kLogFileName = 'olidesk-deploy.log';
 
@@ -42,133 +52,206 @@ File? _logFile;
 bool _logFileTried = false;
 
 Future<void> tryOlideskAutoRegister() async {
-  await _log('--- olidesk auto-registration starting ---');
+  await logOlideskDeploy('--- olidesk auto-registration starting ---');
   try {
     // Fast path: already registered, skip the file check entirely.
-    if (bind.mainGetLocalOption(key: _kRegisteredOptionKey) == 'Y') {
-      await _log('already registered on this machine, nothing to do');
+    if (bind.mainGetLocalOption(key: kOlideskRegisteredOptionKey) == 'Y') {
+      await logOlideskDeploy('already registered on this machine, nothing to do');
       return;
     }
 
-    final exeDir = _exeDir();
-    if (exeDir == null) {
-      await _log('could not resolve the executable directory, aborting');
+    final file = await _deployFile();
+    if (file == null) {
+      await logOlideskDeploy('could not resolve the executable directory, aborting');
       return;
     }
-    final file = File('${exeDir.path}${Platform.pathSeparator}$_kDeployFileName');
-    await _log('looking for deploy config at: ${file.path}');
+    await logOlideskDeploy('looking for deploy config at: ${file.path}');
     if (!await file.exists()) {
-      await _log('no $_kDeployFileName found next to the executable, nothing to do');
+      await logOlideskDeploy('no $_kDeployFileName found next to the executable, nothing to do');
       return;
     }
-    await _log('found $_kDeployFileName');
+    await logOlideskDeploy('found $_kDeployFileName');
 
-    Map<String, dynamic> config;
-    try {
-      var raw = await file.readAsString();
-      // Strip a leading UTF-8 BOM: common when the file is hand-edited in
-      // Notepad, and jsonDecode rejects it outright with no useful message.
-      if (raw.isNotEmpty && raw.codeUnitAt(0) == 0xFEFF) {
-        raw = raw.substring(1);
-      }
-      final parsed = jsonDecode(raw);
-      if (parsed is! Map<String, dynamic>) {
-        await _log('$_kDeployFileName does not contain a JSON object, aborting');
-        return;
-      }
-      config = parsed;
-    } catch (e) {
-      await _log('failed to parse $_kDeployFileName: $e');
+    final config = await _readDeployFile(file);
+    if (config == null) {
       return;
     }
 
     final apiUrl = ((config['api_url'] as String?) ?? '')
         .trim()
         .replaceAll(RegExp(r'/+$'), '');
-    final deployToken = ((config['deploy_token'] as String?) ?? '').trim();
-    var group = ((config['group'] as String?) ?? '').trim();
+    final code = ((config['enroll_code'] as String?) ?? '').trim();
+    final group = ((config['group'] as String?) ?? '').trim();
     final deviceName = ((config['device_name'] as String?) ?? '').trim();
 
-    if (apiUrl.isEmpty || deployToken.isEmpty) {
-      await _log(
-          '$_kDeployFileName is missing api_url or deploy_token, aborting');
+    if (apiUrl.isEmpty || code.isEmpty) {
+      await logOlideskDeploy(
+          '$_kDeployFileName is missing api_url or enroll_code, aborting');
       return;
     }
 
-    // "#TEMPnnnn" is Windows Installer's internal placeholder name for an
-    // unresolved ComboBox item, and "GROUPS_LOADED"/"DEPLOY_GROUPS_STATUS"/
-    // "LOADED" are internal status values the installer's FetchGroups custom
-    // action sets on a separate MSI property -- both kinds have leaked into
-    // GROUP as a real (bogus) value from the installer's device-registration
-    // prompt before. The installer itself now guards against writing either
-    // (see WriteDeployJson in res/msi/CustomActions/DeployConfig.cpp), but a
-    // hand-written or older olidesk-deploy.json could still carry one, so
-    // refuse them here too rather than ever send one on to the server.
-    const knownStatusValues = {'GROUPS_LOADED', 'DEPLOY_GROUPS_STATUS', 'LOADED'};
-    if (group.startsWith('#TEMP') || knownStatusValues.contains(group)) {
-      await _log(
-          'group "$group" looks like an MSI placeholder/status artifact, treating as empty');
-      group = '';
-    }
+    await logOlideskDeploy('config ok: api_url=$apiUrl group=${group.isEmpty ? '(none)' : group}');
 
-    await _log('config ok: api_url=$apiUrl group=${group.isEmpty ? '(none)' : group}');
-
-    await _log('waiting for a RustDesk id (up to ${_kIdWaitAttempts}s)...');
-    final olideskId = await _waitForId();
+    await logOlideskDeploy('waiting for a RustDesk id (up to ${_kIdWaitAttempts}s)...');
+    final olideskId = await waitForOlideskId();
     if (olideskId == null || olideskId.isEmpty) {
-      await _log('no RustDesk id available yet, will retry next launch');
+      await logOlideskDeploy('no RustDesk id available yet, will retry next launch');
       return;
     }
-    await _log('got id: $olideskId');
+    await logOlideskDeploy('got id: $olideskId');
 
-    final body = jsonEncode({
-      'olidesk_id': olideskId,
-      'hostname': deviceName.isNotEmpty ? deviceName : _hostname(),
-      'os': _osName(),
-      if (group.isNotEmpty) 'group': group,
-    });
-    await _log('POST $apiUrl/api/clients/register body=$body');
+    final hostname = deviceName.isNotEmpty ? deviceName : olideskHostname();
+    await logOlideskDeploy('registering with the server...');
+    final result = await registerOlideskDevice(
+      apiUrl: apiUrl,
+      code: code,
+      olideskId: olideskId,
+      hostname: hostname,
+      os: olideskOsName(),
+      group: group.isNotEmpty ? group : null,
+    );
+    await logOlideskDeploy('response: HTTP ${result.statusCode} ok=${result.ok}'
+        '${result.ok ? '' : ' (${result.message})'}');
 
-    final http.Response resp;
-    try {
-      resp = await http_svc
-          .post(
-            Uri.parse('$apiUrl/api/clients/register'),
-            headers: {
-              'Authorization': 'Bearer $deployToken',
-              'Content-Type': 'application/json',
-            },
-            body: body,
-          )
-          .timeout(const Duration(seconds: 15));
-    } catch (e) {
-      await _log('registration request failed: $e');
-      return;
-    }
-    await _log('response: HTTP ${resp.statusCode} ${resp.body}');
-
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      await _log('registration rejected by the server, will retry next launch');
+    if (!result.ok) {
+      await logOlideskDeploy('registration rejected by the server, will retry next launch');
       return;
     }
 
-    await bind.mainSetLocalOption(key: _kRegisteredOptionKey, value: 'Y');
-    await _log('registered successfully, marked done');
+    await bind.mainSetLocalOption(key: kOlideskRegisteredOptionKey, value: 'Y');
+    await logOlideskDeploy('registered successfully, marked done');
 
     // Best-effort: the machine stays registered even if this fails, e.g.
     // because the file was copied from read-only removable media, or the
     // install directory isn't writable by this user.
     try {
       await file.delete();
-      await _log('deleted $_kDeployFileName');
+      await logOlideskDeploy('deleted $_kDeployFileName');
     } catch (e) {
-      await _log('could not delete $_kDeployFileName (harmless): $e');
+      await logOlideskDeploy('could not delete $_kDeployFileName (harmless): $e');
     }
   } catch (e, st) {
-    await _log('unexpected error: $e\n$st');
+    await logOlideskDeploy('unexpected error: $e\n$st');
   } finally {
-    await _log('--- olidesk auto-registration finished ---');
+    await logOlideskDeploy('--- olidesk auto-registration finished ---');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers — used by both the silent path above and the interactive
+// "Register this device" dialog (widgets/olidesk_register_device.dart).
+// ---------------------------------------------------------------------------
+
+class OlideskRegisterResult {
+  final bool ok;
+  final int statusCode;
+  final String message;
+  const OlideskRegisterResult(this.ok, this.statusCode, this.message);
+}
+
+/// POSTs to /api/clients/register. Never logs [code] (or anything derived
+/// from it) — only the caller's own step-by-step log lines around this call
+/// should ever mention non-secret details like the group or status code.
+Future<OlideskRegisterResult> registerOlideskDevice({
+  required String apiUrl,
+  required String code,
+  required String olideskId,
+  required String hostname,
+  required String os,
+  String? group,
+}) async {
+  final body = jsonEncode({
+    'olidesk_id': olideskId,
+    'hostname': hostname,
+    'os': os,
+    if (group != null && group.isNotEmpty) 'group': group,
+  });
+  final http.Response resp;
+  try {
+    resp = await http_svc
+        .post(
+          Uri.parse('$apiUrl/api/clients/register'),
+          headers: {
+            'Authorization': 'Bearer $code',
+            'Content-Type': 'application/json',
+          },
+          body: body,
+        )
+        .timeout(const Duration(seconds: 15));
+  } catch (e) {
+    return OlideskRegisterResult(false, 0, e.toString());
+  }
+
+  final ok = resp.statusCode >= 200 && resp.statusCode < 300;
+  var message = 'HTTP ${resp.statusCode}';
+  if (!ok) {
+    try {
+      final parsed = jsonDecode(resp.body);
+      if (parsed is Map && parsed['error'] != null) {
+        message = parsed['error'].toString();
+      }
+    } catch (_) {}
+  }
+  return OlideskRegisterResult(ok, resp.statusCode, message);
+}
+
+/// GETs /api/deploy/groups with [code] as the bearer credential. Returns
+/// null on any failure (unreachable, invalid/expired code, bad response) --
+/// the caller can't distinguish those cases from this alone, but the
+/// dialog only needs a yes/no "is this code usable right now".
+Future<List<String>?> fetchOlideskGroups({
+  required String apiUrl,
+  required String code,
+}) async {
+  try {
+    final resp = await http_svc
+        .get(
+          Uri.parse('$apiUrl/api/deploy/groups'),
+          headers: {'Authorization': 'Bearer $code'},
+        )
+        .timeout(const Duration(seconds: 10));
+    if (resp.statusCode != 200) return null;
+    final parsed = jsonDecode(resp.body);
+    if (parsed is! List) return null;
+    return parsed.whereType<String>().toList();
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Best-effort read of olidesk-deploy.json, e.g. so the interactive dialog
+/// can prefill device_name/api_url/group if a (possibly code-less) file
+/// exists. Returns null if there's no file, or it can't be read/parsed.
+Future<Map<String, dynamic>?> readOlideskDeployFile() async {
+  final file = await _deployFile();
+  if (file == null || !await file.exists()) return null;
+  return _readDeployFile(file);
+}
+
+Future<Map<String, dynamic>?> _readDeployFile(File file) async {
+  try {
+    var raw = await file.readAsString();
+    // Strip a leading UTF-8 BOM: common when the file is hand-edited in
+    // Notepad, and jsonDecode rejects it outright with no useful message.
+    if (raw.isNotEmpty && raw.codeUnitAt(0) == 0xFEFF) {
+      raw = raw.substring(1);
+    }
+    final parsed = jsonDecode(raw);
+    if (parsed is! Map<String, dynamic>) {
+      await logOlideskDeploy('$_kDeployFileName does not contain a JSON object');
+      return null;
+    }
+    return parsed;
+  } catch (e) {
+    await logOlideskDeploy('failed to parse $_kDeployFileName: $e');
+    return null;
+  }
+}
+
+Future<File?> _deployFile() async {
+  final exeDir = _exeDir();
+  if (exeDir == null) return null;
+  return File('${exeDir.path}${Platform.pathSeparator}$_kDeployFileName');
 }
 
 Directory? _exeDir() {
@@ -179,7 +262,7 @@ Directory? _exeDir() {
   }
 }
 
-Future<String?> _waitForId() async {
+Future<String?> waitForOlideskId() async {
   for (var i = 0; i < _kIdWaitAttempts; i++) {
     final id = await bind.mainGetMyId();
     if (id.isNotEmpty) return id;
@@ -188,7 +271,7 @@ Future<String?> _waitForId() async {
   return null;
 }
 
-String _hostname() {
+String olideskHostname() {
   try {
     return Platform.localHostname;
   } catch (_) {
@@ -196,7 +279,7 @@ String _hostname() {
   }
 }
 
-String _osName() {
+String olideskOsName() {
   if (Platform.isWindows) return 'Windows';
   if (Platform.isMacOS) return 'macOS';
   if (Platform.isLinux) return 'Linux';
@@ -217,7 +300,7 @@ String _osName() {
 // attached with a debugger or running from a terminal.
 // ---------------------------------------------------------------------------
 
-Future<void> _log(String line) async {
+Future<void> logOlideskDeploy(String line) async {
   debugPrint('[olidesk-deploy] $line');
   final file = await _resolveLogFile();
   if (file == null) return;

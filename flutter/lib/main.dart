@@ -25,6 +25,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'common.dart';
 import 'common/olidesk_deploy.dart';
+import 'common/widgets/olidesk_register_device.dart';
 import 'consts.dart';
 import 'mobile/pages/home_page.dart';
 import 'mobile/pages/server_page.dart';
@@ -144,11 +145,18 @@ void runMainApp(bool startService) async {
     bind.pluginSyncUi(syncTo: kAppTypeMain);
     bind.pluginListReload();
   }
-  // Fire-and-forget: no-op unless a deployment package dropped
-  // olidesk-deploy.json next to the executable (see olidesk_deploy.dart).
-  // Runs after startService() so the background service (and the RustDesk
-  // id it serves over IPC) is already coming up by the time this polls it.
-  unawaited(tryOlideskAutoRegister());
+  // Fire-and-forget: tries silent registration first (a no-op unless a
+  // deployment package dropped olidesk-deploy.json next to the executable,
+  // see olidesk_deploy.dart), then falls back to the interactive "Register
+  // this device" dialog if the device still isn't registered afterwards
+  // (olidesk_register_device.dart) -- covers both the silent-install and
+  // plain-interactive-install cases with one call. Runs after startService()
+  // so the background service (and the RustDesk id it serves over IPC) is
+  // already coming up by the time either path polls it.
+  unawaited(() async {
+    await tryOlideskAutoRegister();
+    await maybeShowOlideskRegisterDialog();
+  }());
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());

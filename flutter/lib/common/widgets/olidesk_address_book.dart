@@ -9,6 +9,7 @@ import '../../common.dart';
 import '../../models/platform_model.dart';
 import '../../utils/http_service.dart' as http_svc;
 import 'olidesk_admin_devices.dart' show showOlideskAdminDevicesDialog;
+import 'olidesk_enrollment_codes.dart' show showOlideskEnrollmentCodesDialog;
 import 'peer_card.dart' show getOnline;
 import 'peers_view.dart' show peerSearchText;
 
@@ -1225,6 +1226,22 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                   onPressed: () {
                     Navigator.pop(ctx);
                     showOlideskAdminDevicesDialog(context);
+                  },
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.vpn_key, size: 16),
+                  label: const Text('Manage enrollment codes'),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    showOlideskEnrollmentCodesDialog(context);
                   },
                   style: TextButton.styleFrom(
                     padding: EdgeInsets.zero,

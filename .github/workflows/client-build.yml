@@ -25,7 +25,7 @@ env:
   TAG_NAME: "${{ github.ref_name }}"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  VERSION: "1.4.49"
+  VERSION: "1.4.50"
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
 
 jobs:
@@ -179,16 +179,14 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build MSI
-        env:
-          OLIDESK_DEPLOY_TOKEN: ${{ secrets.OLIDESK_DEPLOY_TOKEN }}
         run: |
           pushd ./res/msi
-          # This step has no `shell:` override, so it runs under PowerShell on
-          # this windows-2022 runner (see the sibling "Build Olidesk client"
-          # step's PowerShell cmdlets) -- "$OLIDESK_DEPLOY_TOKEN" is bash
-          # syntax and silently expands to empty here. $env:OLIDESK_DEPLOY_TOKEN
-          # is the correct PowerShell form.
-          python preprocess.py --arp -d ../../rustdesk --app-name Olidesk --api-url https://olidesk.olisys.co.il --deploy-token "$env:OLIDESK_DEPLOY_TOKEN"
+          # No secret here anymore: api_url is a plain hostname, not a
+          # token, so there's nothing that needs to come from a CI secret
+          # (see the removed OLIDESK_DEPLOY_TOKEN and --deploy-token --
+          # enrollment codes are minted per-deployment from the admin app
+          # instead of a long-lived credential baked into every installer).
+          python preprocess.py --arp -d ../../rustdesk --app-name Olidesk --api-url https://olidesk.olisys.co.il
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           mv ./Package/bin/x64/Release/en-us/Package.msi ../../SignOutput/olidesk-client-${{ env.VERSION }}-x86_64.msi

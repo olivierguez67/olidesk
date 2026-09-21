@@ -14,5 +14,4 @@ EXPORTS
     RemoveAmyuniIdd
     InstallPrinter
     UninstallPrinter
-    FetchGroups
     WriteDeployJson

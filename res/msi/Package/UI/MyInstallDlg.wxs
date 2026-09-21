@@ -74,24 +74,17 @@ Patch dialog sequence:
             <Publish Dialog="MyInstallDirDlg" Control="Next" Property="INSTALLFOLDER_INNER" Value="[INSTALLFOLDER_INNER]\$(var.Product)\" Order="3" Condition="INSTALLFOLDER_INNER AND NOT INSTALLFOLDER_INNER ~&gt;&gt; &quot;\&quot; AND NOT (INSTALLFOLDER_INNER ~&gt;&gt; &quot;\$(var.Product)\&quot; OR INSTALLFOLDER_INNER ~&gt;&gt; &quot;\$(var.Product)&quot;)" />
             <Publish Dialog="MyInstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="4" />
             <Publish Dialog="MyInstallDirDlg" Control="Next" Event="SpawnDialog" Value="InvalidDirDlg" Order="6" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
-            <?ifdef ApiUrl?>
-            <!-- Client build: detour through DeployConfigDlg (device name / group),
-                 fetching the group list just before it's shown. See DeployConfigDlg.wxs
-                 and FetchGroups in ../../CustomActions/DeployConfig.cpp. -->
-            <Publish Dialog="MyInstallDirDlg" Control="Next" Event="DoAction" Value="FetchGroups" Order="7" Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
-            <Publish Dialog="MyInstallDirDlg" Control="Next" Event="NewDialog" Value="DeployConfigDlg" Order="8" Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
-            <Publish Dialog="DeployConfigDlg" Control="Back" Event="NewDialog" Value="MyInstallDirDlg" />
-            <Publish Dialog="DeployConfigDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
-            <?else?>
+            <!-- No device-registration detour here anymore: the app's own
+                 "Register this device" dialog (flutter/lib/common/widgets/
+                 olidesk_register_device.dart) handles that on first launch
+                 instead, for both interactive and silent installs. See
+                 WriteDeployJson in ../Components/RustDesk.wxs for how a
+                 silent install's ENROLLCODE/GROUP/DEVICENAME properties
+                 still reach the app without any installer-side UI. -->
             <Publish Dialog="MyInstallDirDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="7" Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
-            <?endif?>
             <Publish Dialog="MyInstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
             <Publish Dialog="MyInstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
-            <?ifdef ApiUrl?>
-            <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="DeployConfigDlg" Order="1" Condition="NOT Installed" />
-            <?else?>
             <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MyInstallDirDlg" Order="1" Condition="NOT Installed" />
-            <?endif?>
             <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
             <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
 

@@ -92,18 +92,14 @@ def make_parser():
         "--api-url",
         type=str,
         default="",
-        help="Olidesk deploy API URL to bake into the installer for the "
-             "device-registration prompt. Leave unset (with --deploy-token) "
-             "to build a plain installer without that prompt, e.g. for the "
-             "admin build.",
-    )
-    parser.add_argument(
-        "--deploy-token",
-        type=str,
-        default="",
-        help="Olidesk deploy API token to bake into the installer, paired "
-             "with --api-url. Never log or print this; only pass it via a "
-             "CI secret.",
+        help="Olidesk API URL to bake into the installer, so silent installs "
+             "(ENROLLCODE=... GROUP=... DEVICENAME=... /qn) can write it into "
+             "olidesk-deploy.json for the app to self-register on first "
+             "launch. Leave unset to build a plain installer with none of "
+             "that, e.g. for the admin build. Not a secret -- no equivalent "
+             "of the old --deploy-token argument exists anymore; enrollment "
+             "codes are minted per-deployment from the admin app instead of "
+             "being baked into the installer.",
     )
     return parser
 
@@ -196,32 +192,23 @@ def gen_pre_vars(args, dist_dir):
             f'{indent}<?define UpgradeCode = "{upgrade_code}" ?>\n',
         ]
 
-        # Only defined when both are given (client builds, via --api-url and
-        # --deploy-token). Package/UI/DeployConfigDlg.wxs and the device-
-        # registration custom actions are entirely gated behind `<?ifdef
-        # ApiUrl?>`, so a build that doesn't pass these (e.g. the admin
-        # build) compiles to exactly the installer it did before this
-        # feature existed -- no dialog, no baked-in token.
+        # Only defined when given (client builds, via --api-url). The
+        # WriteDeployJson custom action (CustomActions/DeployConfig.cpp) is
+        # entirely gated behind `<?ifdef ApiUrl?>`, so a build that doesn't
+        # pass this (e.g. the admin build) compiles to a plain installer
+        # with no deployment support at all.
         #
-        # Diagnostic: lengths only, never the token itself, so this is safe
-        # to leave in CI logs permanently. If deploy_token_len is 0 here,
-        # ApiUrl/DeployToken will NOT be defined and the dialog/custom
-        # actions will silently compile out -- check how --deploy-token was
-        # actually invoked (shell quoting/expansion), not just whether the
-        # secret itself has a value.
+        # Diagnostic: length only, so this is safe to leave in CI logs
+        # permanently -- not that api_url is secret anyway, unlike the old
+        # deploy token this replaced.
         print(
             f"[preprocess.py] api_url_len={len(args.api_url)} "
-            f"deploy_token_len={len(args.deploy_token)} "
-            f"-> ApiUrl/DeployToken will be "
-            f"{'DEFINED' if (args.api_url and args.deploy_token) else 'UNDEFINED'}"
+            f"-> ApiUrl will be {'DEFINED' if args.api_url else 'UNDEFINED'}"
         )
-        if args.api_url and args.deploy_token:
+        if args.api_url:
             to_insert_lines.append("\n")
             to_insert_lines.append(
                 f'{indent}<?define ApiUrl="{_xml_attr_escape(args.api_url)}" ?>\n'
-            )
-            to_insert_lines.append(
-                f'{indent}<?define DeployToken="{_xml_attr_escape(args.deploy_token)}" ?>\n'
             )
 
         for i, line in enumerate(to_insert_lines):

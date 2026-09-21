@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import sqlite3
 import logging
@@ -22,10 +23,6 @@ with open(CONFIG_PATH) as _f:
 # reach it. Keep it secret and treat rotating it as a real incident response
 # action, since anyone with it can mint new admin devices.
 TOKEN = _CONFIG["token"]
-# Separate, narrower-scoped token: only valid for POST /api/clients/register,
-# so a deployment script that leaks this token cannot read or modify the
-# rest of the address book (see require_deploy_auth below).
-DEPLOY_TOKEN = _CONFIG.get("deploy_token")
 DB_PATH = _CONFIG.get("db_path", "/data/address_book.sqlite")
 HOST = _CONFIG.get("host", "0.0.0.0")
 PORT = int(_CONFIG.get("port", 8443))
@@ -33,6 +30,17 @@ PORT = int(_CONFIG.get("port", 8443))
 MAX_ADMIN_DEVICES = 4
 REGISTER_RATE_LIMIT = 20
 REGISTER_RATE_WINDOW = timedelta(hours=1)
+
+# Enrollment codes (see require_enroll_auth and /api/admin/enrollment-codes)
+# replace the old single shared DEPLOY_TOKEN that used to be baked into
+# every client MSI -- no long-lived secret ships in a public installer
+# anymore. Short, human-typeable, generated per deployment batch from the
+# admin app, and time-limited.
+ENROLL_CODE_LENGTH = 8
+ENROLL_CODE_TTL = timedelta(hours=24)
+# No 0/O/1/I/L: characters that are easy to misread or mistype when a code
+# is read off a screen and typed into the client's registration dialog.
+_ENROLL_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -97,6 +105,10 @@ CREATE TABLE IF NOT EXISTS admin_devices (
 -- Audit trail for /api/clients/register, and the source of truth for its
 -- rate limit (COUNT(*) over the trailing window beats an in-memory counter,
 -- since gunicorn runs multiple worker processes that don't share memory).
+-- token_hash holds a hash of whatever credential authenticated the
+-- registration -- originally the single shared deploy token, now an
+-- enrollment code's normalized value (see require_enroll_auth) -- so each
+-- credential gets its own independent rate-limit bucket.
 CREATE TABLE IF NOT EXISTS registration_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     token_hash TEXT NOT NULL,
@@ -105,6 +117,25 @@ CREATE TABLE IF NOT EXISTS registration_events (
     olidesk_id TEXT,
     group_name TEXT,
     created_at TEXT NOT NULL
+);
+
+-- Short-lived codes minted from the admin app (see /api/admin/enrollment-
+-- codes) that authenticate a fresh client's device-registration dialog
+-- (flutter/lib/common/widgets/olidesk_register_device.dart) and silent
+-- MSI installs (ENROLLCODE=... on the msiexec command line). Reusable
+-- (not single-use) within their lifetime, same as the old deploy token,
+-- since one code is meant to cover a whole deployment batch -- just
+-- scoped to 24h and individually revocable instead of a single
+-- long-lived secret baked into every installer.
+CREATE TABLE IF NOT EXISTS enrollment_codes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    code         TEXT    NOT NULL UNIQUE,
+    created_at   TEXT    NOT NULL,
+    expires_at   TEXT    NOT NULL,
+    revoked_at   TEXT,
+    created_by   TEXT,
+    last_used_at TEXT,
+    use_count    INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -239,15 +270,43 @@ def require_admin_devices_auth(f):
     return decorated
 
 
-def require_deploy_auth(f):
-    """Accepts only DEPLOY_TOKEN, never an admin credential. Deliberately not
-    a fallback on top of the admin auth decorators: the deploy token stays
-    scoped to this one endpoint."""
+def _normalize_enroll_code(raw: str) -> str:
+    """Upper-cases and strips everything but letters/digits, so "k7h2-9x4q",
+    "K7H29X4Q", and "  K7H2-9X4Q  " (however the client or a human typed or
+    pasted it) all resolve to the same stored code."""
+    return re.sub(r"[^A-Z0-9]", "", (raw or "").upper())
+
+
+def _format_enroll_code(code: str) -> str:
+    """The human-facing "XXXX-XXXX" spelling of a stored (dash-free) code."""
+    return f"{code[:4]}-{code[4:]}" if len(code) == ENROLL_CODE_LENGTH else code
+
+
+def _generate_enroll_code() -> str:
+    return "".join(secrets.choice(_ENROLL_CODE_ALPHABET) for _ in range(ENROLL_CODE_LENGTH))
+
+
+def require_enroll_auth(f):
+    """Accepts only a valid, unexpired, unrevoked enrollment code (see
+    /api/admin/enrollment-codes) as the bearer token, never an admin
+    credential. Deliberately not a fallback on top of the admin auth
+    decorators: an enrollment code stays scoped to exactly the two
+    endpoints a fresh client needs. Replaces the old single shared
+    DEPLOY_TOKEN that used to be baked into every client MSI."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = _bearer_token()
-        if not DEPLOY_TOKEN or token != DEPLOY_TOKEN:
+        code = _normalize_enroll_code(_bearer_token())
+        if not code:
             return jsonify({"error": "Unauthorized"}), 401
+        db = get_db()
+        now = datetime.now(timezone.utc).isoformat()
+        row = db.execute(
+            "SELECT * FROM enrollment_codes WHERE code = ? AND revoked_at IS NULL AND expires_at > ?",
+            (code, now),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "Unauthorized"}), 401
+        g.enrollment_code = row
         return f(*args, **kwargs)
     return decorated
 
@@ -536,18 +595,23 @@ def move_client(client_id):
 
 
 @app.route("/api/clients/register", methods=["POST"])
-@require_deploy_auth
+@require_enroll_auth
 def register_client():
-    """Self-service registration used by freshly deployed clients (see
-    flutter/lib/common/olidesk_deploy.dart). Deliberately narrower than
-    POST /api/clients: no notes/sort_order, and re-registering an existing
-    olidesk_id updates it in place instead of creating a duplicate entry.
+    """Self-service registration used by freshly deployed clients -- both
+    the silent path (olidesk-deploy.json, written by the MSI from
+    ENROLLCODE=...; see flutter/lib/common/olidesk_deploy.dart) and the
+    app's own "Register this device" dialog (olidesk_register_device.dart).
+    Deliberately narrower than POST /api/clients: no notes/sort_order, and
+    re-registering an existing olidesk_id updates it in place instead of
+    creating a duplicate entry.
 
     Rate limited to REGISTER_RATE_LIMIT calls per REGISTER_RATE_WINDOW per
-    deploy token, counted from registration_events (not an in-memory
-    counter, since it has to hold across gunicorn's worker processes)."""
+    enrollment code, counted from registration_events (not an in-memory
+    counter, since it has to hold across gunicorn's worker processes) --
+    each code gets its own independent bucket."""
     db = get_db()
-    token_hash = _hash_token(DEPLOY_TOKEN or "")
+    code_row = g.enrollment_code
+    token_hash = _hash_token(code_row["code"])
     window_start = (datetime.now(timezone.utc) - REGISTER_RATE_WINDOW).isoformat()
     recent = db.execute(
         "SELECT COUNT(*) AS n FROM registration_events WHERE token_hash = ? AND created_at > ?",
@@ -607,6 +671,10 @@ def register_client():
            VALUES (?, ?, ?, ?, ?, ?)""",
         (token_hash, _client_ip(), hostname, olidesk_id, group_name, now),
     )
+    db.execute(
+        "UPDATE enrollment_codes SET last_used_at = ?, use_count = use_count + 1 WHERE id = ?",
+        (now, code_row["id"]),
+    )
     db.commit()
     log.info(
         "client registered: ip=%s hostname=%s group=%s olidesk_id=%s",
@@ -618,22 +686,89 @@ def register_client():
 
 
 @app.route("/api/deploy/groups", methods=["GET"])
-@require_deploy_auth
+@require_enroll_auth
 def list_deploy_groups():
-    """Read-only group name list for the installer's device-registration
-    prompt (see FetchGroups in res/msi/CustomActions/DeployConfig.cpp).
-    Deliberately minimal -- just top-level group names, nothing a leaked
-    deploy token could use to enumerate clients, IDs, or the group tree.
+    """Read-only group name list for the client's "Register this device"
+    dialog (flutter/lib/common/widgets/olidesk_register_device.dart), shown
+    once a typed enrollment code validates. Deliberately minimal -- just
+    top-level group names, nothing a leaked/guessed code could use to
+    enumerate clients, IDs, or the group tree.
 
-    /api/groups (the admin endpoint) 401s for a deploy token now that
+    /api/groups (the admin endpoint) 401s for an enrollment code now that
     address-book access is per-device (require_ab_auth); this is the
-    deploy-token-scoped equivalent for exactly the one thing the installer
-    needs."""
+    enrollment-code-scoped equivalent for exactly the one thing a
+    registering client needs."""
     db = get_db()
     rows = db.execute(
         "SELECT name FROM groups WHERE parent_id IS NULL ORDER BY lower(name)"
     ).fetchall()
     return jsonify([r["name"] for r in rows])
+
+
+# ---------------------------------------------------------------------------
+# Enrollment code endpoints (admin-only)
+# ---------------------------------------------------------------------------
+
+_ENROLLMENT_CODE_SELECT = (
+    "SELECT id, code, created_at, expires_at, revoked_at, created_by, "
+    "last_used_at, use_count FROM enrollment_codes"
+)
+
+
+def _enrollment_code_public(row) -> dict:
+    d = dict(row)
+    d["code"] = _format_enroll_code(d["code"])
+    return d
+
+
+@app.route("/api/admin/enrollment-codes", methods=["GET"])
+@require_admin_devices_auth
+def list_enrollment_codes():
+    db = get_db()
+    rows = db.execute(_ENROLLMENT_CODE_SELECT + " ORDER BY created_at DESC").fetchall()
+    return jsonify([_enrollment_code_public(r) for r in rows])
+
+
+@app.route("/api/admin/enrollment-codes", methods=["POST"])
+@require_admin_devices_auth
+def create_enrollment_code():
+    db = get_db()
+    now = datetime.now(timezone.utc)
+
+    code = _generate_enroll_code()
+    # 32^8 possible codes makes a collision astronomically unlikely, but the
+    # UNIQUE constraint means one would 500 the request instead of silently
+    # minting a duplicate -- retry a handful of times rather than trust luck.
+    for _ in range(5):
+        if not db.execute("SELECT 1 FROM enrollment_codes WHERE code = ?", (code,)).fetchone():
+            break
+        code = _generate_enroll_code()
+
+    cur = db.execute(
+        """INSERT INTO enrollment_codes (code, created_at, expires_at, created_by)
+           VALUES (?, ?, ?, ?)""",
+        (code, now.isoformat(), (now + ENROLL_CODE_TTL).isoformat(), _current_actor_name()),
+    )
+    db.commit()
+    row = db.execute(_ENROLLMENT_CODE_SELECT + " WHERE id = ?", (cur.lastrowid,)).fetchone()
+    admin_auth_log.info("ENROLL_CODE_CREATED ip=%s by=%s", _client_ip(), _current_actor_name())
+    return jsonify(_enrollment_code_public(row)), 201
+
+
+@app.route("/api/admin/enrollment-codes/<int:code_id>", methods=["DELETE"])
+@require_admin_devices_auth
+def revoke_enrollment_code(code_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM enrollment_codes WHERE id = ?", (code_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    db.execute(
+        "UPDATE enrollment_codes SET revoked_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), code_id),
+    )
+    db.commit()
+    admin_auth_log.info("ENROLL_CODE_REVOKED ip=%s by=%s", _client_ip(), _current_actor_name())
+    return jsonify({"revoked": code_id})
 
 
 # ---------------------------------------------------------------------------

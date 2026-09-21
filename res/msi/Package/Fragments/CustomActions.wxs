@@ -21,13 +21,17 @@
 		<CustomAction Id="UninstallPrinter" DllEntry="UninstallPrinter" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
 
 		<?ifdef ApiUrl?>
-		<!-- Deployment device-registration prompt (client build only); see
-		     Package/UI/DeployConfigDlg.wxs and CustomActions/DeployConfig.cpp. -->
-		<CustomAction Id="FetchGroups" DllEntry="FetchGroups" Impersonate="yes" Execute="immediate" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
-		<!-- HideTarget: WriteDeployJson's CustomActionData carries DEPLOY_TOKEN
+		<!-- Writes olidesk-deploy.json for a silent install's ENROLLCODE/
+		     GROUP/DEVICENAME properties (client build only); see
+		     CustomActions/DeployConfig.cpp and the comment on
+		     WriteDeployJson.SetParam in Components/RustDesk.wxs. No dialog,
+		     no network call from the installer -- the app's own "Register
+		     this device" dialog (flutter/lib/common/widgets/
+		     olidesk_register_device.dart) handles everything interactive. -->
+		<!-- HideTarget: WriteDeployJson's CustomActionData carries ENROLLCODE
 		     in plaintext (see the comment on WriteDeployJson.SetParam in
 		     RustDesk.wxs); without this a verbose log dumps that
-		     CustomActionData string, token included, when the deferred action
+		     CustomActionData string, code included, when the deferred action
 		     runs. MsiHiddenProperties (RustDesk.wxs) covers the property-set
 		     trace; this covers the deferred action's own data dump. -->
 		<CustomAction Id="WriteDeployJson" DllEntry="WriteDeployJson" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll" HideTarget="yes"/>
