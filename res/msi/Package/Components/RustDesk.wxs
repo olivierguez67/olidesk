@@ -39,17 +39,25 @@
 		     also settable from the command line for silent installs, e.g.
 		     msiexec /i olidesk.msi GROUP="ASPEN GROUP" DEVICENAME="Reception PC" /qn -->
 		<Property Id="API_URL" Value="$(var.ApiUrl)" />
-		<Property Id="DEPLOY_TOKEN" Value="$(var.DeployToken)" />
 		<!-- DEPLOY_TOKEN is a secret baked into the MSI at build time, and
 		     WriteDeployJson's CustomActionData (set by WriteDeployJson.SetParam
 		     below) embeds it in plaintext as part of the joined field string.
-		     Without this, a verbose install log (msiexec /l*v, which is what
-		     anyone debugging this installer would reach for) would print both
-		     in cleartext: the static "Property(S): DEPLOY_TOKEN = ..." dump
-		     at the top of the log, and a "PROPERTY CHANGE: Adding
-		     WriteDeployJson property..." line when .SetParam runs. This masks
-		     both to a redacted placeholder instead. -->
-		<Property Id="MsiHiddenProperties" Value="DEPLOY_TOKEN;WriteDeployJson" />
+		     Without Hidden="yes" here (and on the WriteDeployJson property
+		     below), a verbose install log (msiexec /l*v, which is what anyone
+		     debugging this installer would reach for) would print both in
+		     cleartext: the static "Property(S): DEPLOY_TOKEN = ..." dump at
+		     the top of the log, and a "PROPERTY CHANGE: Adding
+		     WriteDeployJson property..." line when .SetParam runs. Hidden is
+		     WiX v4's authored equivalent of adding a property to
+		     MsiHiddenProperties: authoring that property directly, as a
+		     first attempt here did, fails the build: "Special MSI properties
+		     cannot be authored. Use the attributes on the Property element
+		     instead." -->
+		<Property Id="DEPLOY_TOKEN" Value="$(var.DeployToken)" Hidden="yes" />
+		<!-- No Value: this is only ever set at runtime by
+		     WriteDeployJson.SetParam below. Declared here purely to carry
+		     Hidden="yes" for the reason explained above. -->
+		<Property Id="WriteDeployJson" Hidden="yes" />
 		<CustomAction Id="SetDefaultDeviceName" Return="check" Property="DEVICENAME" Value="[ComputerName]" />
 		<!-- Fields are joined with this marker string rather than a plain
 		     character like ';', since DEVICENAME/GROUP are free text typed
