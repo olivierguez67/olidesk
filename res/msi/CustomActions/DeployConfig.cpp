@@ -305,10 +305,34 @@ bool HttpsGetJson(const std::wstring& url, const std::wstring& bearerToken, std:
     return ok;
 }
 
-// Inserts one row into the ComboBox table for the given property. The
-// table itself is created by the WiX compiler because DeployConfigDlg.wxs
-// declares a Control of Type="ComboBox" -- no static <ComboBox> items are
-// needed there since every row is inserted here, at runtime.
+// The ComboBox table only exists in the compiled MSI because
+// DeployConfigDlg.wxs authors one static placeholder <ListItem> under
+// GroupCombo's <ComboBox> -- WiX only emits the table's schema when it's
+// referenced by an authored row; INSERT INTO ComboBox against a database
+// that never got the table at all fails at install time with error 2205
+// ("table does not exist"), which is what a from-scratch runtime-only
+// population (no static item) actually did in testing. ClearComboBoxRows
+// wipes that placeholder (and anything from a previous run of this CA, if
+// the user goes Back then Next again) before InsertComboBoxRow adds the
+// real, server-fetched rows.
+bool ClearComboBoxRows(MSIHANDLE hInstall, LPCWSTR property)
+{
+    PMSIHANDLE hDb = MsiGetActiveDatabase(hInstall);
+    if (!hDb) return false;
+
+    PMSIHANDLE hView;
+    UINT r = MsiDatabaseOpenViewW(hDb, L"DELETE FROM `ComboBox` WHERE `Property` = ?", &hView);
+    if (r != ERROR_SUCCESS) return false;
+
+    PMSIHANDLE hRecord = MsiCreateRecord(1);
+    MsiRecordSetStringW(hRecord, 1, property);
+
+    r = MsiViewExecute(hView, hRecord);
+    MsiViewClose(hView);
+    return r == ERROR_SUCCESS;
+}
+
+// Inserts one row into the ComboBox table for the given property.
 bool InsertComboBoxRow(MSIHANDLE hInstall, LPCWSTR property, int order, const std::wstring& text)
 {
     PMSIHANDLE hDb = MsiGetActiveDatabase(hInstall);
@@ -340,6 +364,12 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
 
     hr = WcaInitialize(hInstall, "FetchGroups");
     ExitOnFailure(hr, "Failed to initialize");
+
+    // Clear the static placeholder row unconditionally, up front, so every
+    // exit path below (including the early "not configured"/"unreachable"
+    // ones) leaves the combo box looking genuinely empty rather than
+    // showing one blank selectable item.
+    ClearComboBoxRows(hInstall, L"GROUP");
 
     {
         wchar_t apiUrl[1024] = { 0 };

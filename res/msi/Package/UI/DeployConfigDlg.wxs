@@ -40,7 +40,18 @@
                      one control instead of two. Populated at runtime by the FetchGroups
                      custom action; see the DoAction publish on MyInstallDirDlg's Next
                      button in ../UI/MyInstallDlg.wxs. -->
-                <Control Id="GroupCombo" Type="ComboBox" X="20" Y="120" Width="320" Height="18" Property="GROUP" ComboList="no" Sorted="yes" />
+                <Control Id="GroupCombo" Type="ComboBox" X="20" Y="120" Width="320" Height="18" Property="GROUP" ComboList="no" Sorted="yes">
+                    <!-- WiX only emits the ComboBox table into the compiled MSI when
+                         a static item is authored somewhere; with none, FetchGroups'
+                         runtime INSERT INTO ComboBox fails at install time with error
+                         2205 ("table does not exist") since the table is simply absent.
+                         This placeholder exists purely to make WiX include the table;
+                         FetchGroups deletes it (and re-inserts real rows) before the
+                         user ever sees this dialog, so it's never actually shown. -->
+                    <ComboBox Property="GROUP">
+                        <ListItem Text=" " Value=" " />
+                    </ComboBox>
+                </Control>
 
                 <!-- A conditionally shown "server unreachable" hint here would need
                      WiX v4's real syntax for per Control visibility conditions, which
