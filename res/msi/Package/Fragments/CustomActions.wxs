@@ -24,7 +24,13 @@
 		<!-- Deployment device-registration prompt (client build only); see
 		     Package/UI/DeployConfigDlg.wxs and CustomActions/DeployConfig.cpp. -->
 		<CustomAction Id="FetchGroups" DllEntry="FetchGroups" Impersonate="yes" Execute="immediate" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
-		<CustomAction Id="WriteDeployJson" DllEntry="WriteDeployJson" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
+		<!-- HideTarget: WriteDeployJson's CustomActionData carries DEPLOY_TOKEN
+		     in plaintext (see the comment on WriteDeployJson.SetParam in
+		     RustDesk.wxs); without this a verbose log dumps that
+		     CustomActionData string, token included, when the deferred action
+		     runs. MsiHiddenProperties (RustDesk.wxs) covers the property-set
+		     trace; this covers the deferred action's own data dump. -->
+		<CustomAction Id="WriteDeployJson" DllEntry="WriteDeployJson" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll" HideTarget="yes"/>
 		<?endif?>
 	</Fragment>
 </Wix>
