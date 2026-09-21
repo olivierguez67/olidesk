@@ -181,6 +181,50 @@ std::vector<std::wstring> ExtractJsonStringArray(const std::string& json)
     return values;
 }
 
+// ---------------------------------------------------------------------
+// File-based diagnostics for FetchGroups
+//
+// A verbose install log of v1.4.48 proved LogInfo (MsiProcessMessage) does
+// reach the log for WriteDeployJson (a deferred action, running server-side
+// -- "MSI (s)" in the log) but NONE of FetchGroups's LogInfo calls ever
+// appeared, even though the code demonstrably ran to completion (the engine's
+// own "PROPERTY CHANGE" trace for code after it was present). FetchGroups is
+// an immediate, impersonated action running client-side ("MSI (c)"); info
+// messages from that context apparently never make it into this install's
+// log, regardless of which API sends them (WcaLog and MsiProcessMessage both
+// failed identically). Rather than keep guessing at the MSI-logging side of
+// that, FetchGroups also writes its own plain-text trace directly to
+// %TEMP%\olidesk-fetchgroups-debug.log via CreateFileW/WriteFile -- the same
+// file I/O WriteDeployJson already uses successfully -- so the next test has
+// real diagnostics regardless of whether MSI logging cooperates.
+void LogToFile(const wchar_t* fmt, ...)
+{
+    wchar_t buf[2048];
+    va_list args;
+    va_start(args, fmt);
+    vswprintf_s(buf, fmt, args);
+    va_end(args);
+
+    wchar_t tempPath[MAX_PATH] = { 0 };
+    if (GetTempPathW(ARRAYSIZE(tempPath), tempPath) == 0) return;
+
+    std::wstring path = std::wstring(tempPath) + L"olidesk-fetchgroups-debug.log";
+
+    HANDLE hFile = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return;
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wchar_t line[2200];
+    swprintf_s(line, L"[%02d:%02d:%02d] %s\r\n", st.wHour, st.wMinute, st.wSecond, buf);
+
+    std::string utf8 = WideToUtf8(line);
+    DWORD written = 0;
+    WriteFile(hFile, utf8.data(), (DWORD)utf8.size(), &written, NULL);
+    CloseHandle(hFile);
+}
+
 std::wstring JsonEscape(const std::wstring& in)
 {
     std::wstring out;
@@ -433,6 +477,34 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
     ExitOnFailure(hr, "Failed to initialize");
 
     LogInfo(hInstall, L"FetchGroups: starting.");
+    LogToFile(L"FetchGroups: starting.");
+
+    // Give GROUP an explicit value (blank), but only if it doesn't already
+    // have one. v1.4.45 (property "GROUPS_LOADED") and v1.4.48 (property
+    // "DEPLOY_GROUPS_STATUS") both reproduced the identical failure on a
+    // real machine: leave the combo untouched, click Next, and GROUP ends
+    // up equal to the *name* of some unrelated property FetchGroups had set
+    // via MsiSetPropertyW earlier in the same run -- never its value, never
+    // blank. The common factor in both incidents was GROUP being left truly
+    // unset (never explicitly assigned) at the moment the dialog loaded.
+    // FetchGroups no longer sets any such unrelated property at all (see
+    // the removed DEPLOY_GROUPS_STATUS code below), and this gives GROUP an
+    // explicit, defined value up front so "never explicitly set" is no
+    // longer possible either -- both together should remove the condition
+    // rather than relocate it to a third property name. Guarded on GROUP
+    // already being empty so a user who goes Back then Next again after
+    // picking something doesn't have their choice wiped.
+    {
+        wchar_t existingGroup[512] = { 0 };
+        DWORD cchExistingGroup = ARRAYSIZE(existingGroup);
+        MsiGetPropertyW(hInstall, L"GROUP", existingGroup, &cchExistingGroup);
+        if (existingGroup[0] == L'\0')
+        {
+            MsiSetPropertyW(hInstall, L"GROUP", L"");
+            LogInfo(hInstall, L"FetchGroups: GROUP was unset, defaulted to empty.");
+            LogToFile(L"FetchGroups: GROUP was unset, defaulted to empty.");
+        }
+    }
 
     // Clear the static placeholder row unconditionally, up front, so every
     // exit path below (including the early "not configured"/"unreachable"
@@ -441,10 +513,12 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
     if (ClearComboBoxRows(hInstall, L"GROUP"))
     {
         LogInfo(hInstall, L"FetchGroups: cleared existing GROUP combo box rows.");
+        LogToFile(L"FetchGroups: cleared existing GROUP combo box rows.");
     }
     else
     {
         LogInfo(hInstall, L"FetchGroups: failed to clear the GROUP combo box placeholder.");
+        LogToFile(L"FetchGroups: failed to clear the GROUP combo box placeholder.");
     }
 
     {
@@ -459,6 +533,7 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
         if (apiUrl[0] == L'\0' || deployToken[0] == L'\0')
         {
             LogInfo(hInstall, L"FetchGroups: API_URL or DEPLOY_TOKEN not set, skipping.");
+            LogToFile(L"FetchGroups: API_URL or DEPLOY_TOKEN not set, skipping.");
             goto LExit;
         }
 
@@ -466,6 +541,7 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
         // admin auth, and 401s for a deploy token.
         std::wstring url = std::wstring(apiUrl) + L"/api/deploy/groups";
         LogInfo(hInstall, L"FetchGroups: requesting %s", url.c_str());
+        LogToFile(L"FetchGroups: requesting %s", url.c_str());
         std::string body;
         DWORD statusCode = 0;
         if (!HttpsGetJson(hInstall, url, deployToken, body, statusCode))
@@ -473,11 +549,16 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
             LogInfo(hInstall,
                 L"FetchGroups: could not reach the server (HTTP status %lu), falling back to free text.",
                 statusCode);
+            LogToFile(L"FetchGroups: could not reach the server (HTTP status %lu), falling back to free text.",
+                statusCode);
             goto LExit;
         }
 
+        LogToFile(L"FetchGroups: HTTP status %lu, body length %zu.", statusCode, body.size());
+
         std::vector<std::wstring> names = ExtractJsonStringArray(body);
         LogInfo(hInstall, L"FetchGroups: got %zu group(s).", names.size());
+        LogToFile(L"FetchGroups: got %zu group(s).", names.size());
 
         int order = 1;
         int inserted = 0;
@@ -486,39 +567,27 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
             if (InsertComboBoxRow(hInstall, L"GROUP", order, name))
             {
                 LogInfo(hInstall, L"FetchGroups: inserted group row %d ('%s').", order, name.c_str());
+                LogToFile(L"FetchGroups: inserted group row %d ('%s').", order, name.c_str());
                 inserted++;
             }
             else
             {
                 LogInfo(hInstall, L"FetchGroups: failed to insert group row %d ('%s').", order, name.c_str());
+                LogToFile(L"FetchGroups: failed to insert group row %d ('%s').", order, name.c_str());
             }
             order++;
         }
         LogInfo(hInstall, L"FetchGroups: inserted %d/%zu group row(s).", inserted, names.size());
+        LogToFile(L"FetchGroups: inserted %d/%zu group row(s).", inserted, names.size());
 
-        // A previous version set this via MsiSetPropertyW() *before* the
-        // ComboBox insert loop above (i.e. interleaved with populating
-        // GROUP's rows), using the name "GROUPS_LOADED". On a real machine
-        // that produced a ComboBox showing the single literal item
-        // "GROUPS_LOADED" instead of the fetched group names, even though:
-        // the Control table (verified via the compiled MSI's Control table)
-        // binds GroupCombo only to Property="GROUP", never to this one; the
-        // JSON parsing above was verified byte-for-byte correct against the
-        // real server response; and the live server response itself was
-        // verified to be a clean group-name array containing no
-        // "GROUPS_LOADED" string anywhere. That rules out a data or parsing
-        // bug and points at the MSI engine itself reacting to a *property
-        // change* fired while a ComboBox control's rows are mid-populate --
-        // plausibly some dialog-refresh/notification path that ends up
-        // rendering the just-changed property's name. Fixed two ways: (1)
-        // this property is now named DEPLOY_GROUPS_STATUS so it can never
-        // collide with GROUP by name, is never bound to any Control (grep
-        // Package/UI/*.wxs -- nothing references it), and (2) it is only
-        // ever set here, strictly *after* every ComboBox row for GROUP has
-        // already been inserted, never interleaved with that loop. Kept
-        // (rather than deleted outright) as a diagnostic property visible in
-        // the MSI log/UI property dump if this ever needs revisiting.
-        MsiSetPropertyW(hInstall, L"DEPLOY_GROUPS_STATUS", L"LOADED");
+        // No property besides GROUP itself is set past this point. Earlier
+        // versions set a second, unrelated "status" property here (first
+        // named GROUPS_LOADED, then DEPLOY_GROUPS_STATUS) purely as an
+        // unused diagnostic marker; both times, on a real machine, GROUP
+        // ended up equal to that property's *name* when left unselected.
+        // See the comment above the GROUP="" default earlier in this
+        // function for the full account. Removed rather than renamed a
+        // third time.
     }
 
 LExit:
