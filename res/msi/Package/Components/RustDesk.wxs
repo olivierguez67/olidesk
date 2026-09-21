@@ -45,7 +45,7 @@
 		     below) embeds it in plaintext as part of the joined field string.
 		     Without this, a verbose install log (msiexec /l*v, which is what
 		     anyone debugging this installer would reach for) would print both
-		     in cleartext -- the static "Property(S): DEPLOY_TOKEN = ..." dump
+		     in cleartext: the static "Property(S): DEPLOY_TOKEN = ..." dump
 		     at the top of the log, and a "PROPERTY CHANGE: Adding
 		     WriteDeployJson property..." line when .SetParam runs. This masks
 		     both to a redacted placeholder instead. -->
