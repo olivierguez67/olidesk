@@ -17,7 +17,9 @@
 //    first launch (flutter/lib/common/olidesk_deploy.dart) instead of
 //    needing that file dropped in by hand after install. Refuses to write
 //    a GROUP value that looks like an unresolved MSI ComboBox placeholder
-//    ("#TEMPnnnn") -- see the comment where it's checked below.
+//    ("#TEMPnnnn") or a known internal status string ("GROUPS_LOADED",
+//    "DEPLOY_GROUPS_STATUS", "LOADED") -- see the comment where it's
+//    checked below.
 //
 // Both are compiled in only when the installer was built with
 // --api-url/--deploy-token (see ../preprocess.py and the `<?ifdef ApiUrl?>`
@@ -388,12 +390,6 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
             goto LExit;
         }
 
-        // Currently unused by the dialog (see the comment in
-        // DeployConfigDlg.wxs) -- kept set for whenever per-Control
-        // visibility conditions get sorted out, and harmless as an unused
-        // property in the meantime.
-        MsiSetPropertyW(hInstall, L"GROUPS_LOADED", L"1");
-
         std::vector<std::wstring> names = ExtractJsonStringArray(body);
         WcaLog(LOGMSG_STANDARD, "FetchGroups: got %zu group(s).", names.size());
 
@@ -406,6 +402,30 @@ UINT __stdcall FetchGroups(__in MSIHANDLE hInstall)
             }
             order++;
         }
+
+        // A previous version set this via MsiSetPropertyW() *before* the
+        // ComboBox insert loop above (i.e. interleaved with populating
+        // GROUP's rows), using the name "GROUPS_LOADED". On a real machine
+        // that produced a ComboBox showing the single literal item
+        // "GROUPS_LOADED" instead of the fetched group names, even though:
+        // the Control table (verified via the compiled MSI's Control table)
+        // binds GroupCombo only to Property="GROUP", never to this one; the
+        // JSON parsing above was verified byte-for-byte correct against the
+        // real server response; and the live server response itself was
+        // verified to be a clean group-name array containing no
+        // "GROUPS_LOADED" string anywhere. That rules out a data or parsing
+        // bug and points at the MSI engine itself reacting to a *property
+        // change* fired while a ComboBox control's rows are mid-populate --
+        // plausibly some dialog-refresh/notification path that ends up
+        // rendering the just-changed property's name. Fixed two ways: (1)
+        // this property is now named DEPLOY_GROUPS_STATUS so it can never
+        // collide with GROUP by name, is never bound to any Control (grep
+        // Package/UI/*.wxs -- nothing references it), and (2) it is only
+        // ever set here, strictly *after* every ComboBox row for GROUP has
+        // already been inserted, never interleaved with that loop. Kept
+        // (rather than deleted outright) as a diagnostic property visible in
+        // the MSI log/UI property dump if this ever needs revisiting.
+        MsiSetPropertyW(hInstall, L"DEPLOY_GROUPS_STATUS", L"LOADED");
     }
 
 LExit:
@@ -479,13 +499,25 @@ UINT __stdcall WriteDeployJson(__in MSIHANDLE hInstall)
         // "#TEMPnnnn" is Windows Installer's internal placeholder name for
         // an unresolved ComboBox item, and has leaked through into GROUP as
         // a real (bogus) value before (an empty/whitespace ListItem Text
-        // rendering as this instead of blank). Whatever the exact cause,
-        // never let it reach the JSON or the server as a real group name --
-        // treat it the same as GROUP never having been set.
-        if (group.rfind(L"#TEMP", 0) == 0)
+        // rendering as this instead of blank). A separate incident put the
+        // literal status string "GROUPS_LOADED" into GROUP the same way
+        // (see the long comment in FetchGroups above). Whatever the exact
+        // MSI-engine mechanism, never let either kind of internal artifact
+        // reach the JSON or the server as a real group name -- treat it the
+        // same as GROUP never having been set.
+        bool looksLikePlaceholder = group.rfind(L"#TEMP", 0) == 0;
+        for (const wchar_t* status : { L"GROUPS_LOADED", L"DEPLOY_GROUPS_STATUS", L"LOADED" })
+        {
+            if (group == status)
+            {
+                looksLikePlaceholder = true;
+                break;
+            }
+        }
+        if (looksLikePlaceholder)
         {
             WcaLog(LOGMSG_STANDARD,
-                "WriteDeployJson: GROUP looked like an MSI placeholder ('%ls'), treating as empty.",
+                "WriteDeployJson: GROUP looked like an MSI placeholder/status artifact ('%ls'), treating as empty.",
                 group.c_str());
             group.clear();
         }

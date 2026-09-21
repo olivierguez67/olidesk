@@ -96,15 +96,18 @@ Future<void> tryOlideskAutoRegister() async {
     }
 
     // "#TEMPnnnn" is Windows Installer's internal placeholder name for an
-    // unresolved ComboBox item; it's leaked into GROUP as a real (bogus)
-    // value from the installer's device-registration prompt before. The
-    // installer itself now guards against writing it (see WriteDeployJson
-    // in res/msi/CustomActions/DeployConfig.cpp), but a hand-written or
-    // older olidesk-deploy.json could still carry one, so refuse it here
-    // too rather than ever send it on to the server.
-    if (group.startsWith('#TEMP')) {
+    // unresolved ComboBox item, and "GROUPS_LOADED"/"DEPLOY_GROUPS_STATUS"/
+    // "LOADED" are internal status values the installer's FetchGroups custom
+    // action sets on a separate MSI property -- both kinds have leaked into
+    // GROUP as a real (bogus) value from the installer's device-registration
+    // prompt before. The installer itself now guards against writing either
+    // (see WriteDeployJson in res/msi/CustomActions/DeployConfig.cpp), but a
+    // hand-written or older olidesk-deploy.json could still carry one, so
+    // refuse them here too rather than ever send one on to the server.
+    const knownStatusValues = {'GROUPS_LOADED', 'DEPLOY_GROUPS_STATUS', 'LOADED'};
+    if (group.startsWith('#TEMP') || knownStatusValues.contains(group)) {
       await _log(
-          'group "$group" looks like an MSI placeholder, treating as empty');
+          'group "$group" looks like an MSI placeholder/status artifact, treating as empty');
       group = '';
     }
 

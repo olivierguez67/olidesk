@@ -7270,7 +7270,7 @@ dependencies = [
 
 [[package]]
 name = "olidesk"
-version = "1.4.44"
+version = "1.4.45"
 dependencies = [
  "android-wakelock",
  "android_logger",
