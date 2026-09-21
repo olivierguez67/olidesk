@@ -31,6 +31,7 @@
 // Package/*.wxs files) -- i.e. the client build, not the admin build.
 
 #include "pch.h"
+#include <strutil.h>
 #include <string>
 #include <vector>
 #include <sstream>
