@@ -61,7 +61,7 @@
 		     MsiHiddenProperties: authoring that property directly fails
 		     the build: "Special MSI properties cannot be authored. Use the
 		     attributes on the Property element instead." -->
-		<Property Id="ENROLLCODE" Value="" Hidden="yes" />
+		<Property Id="ENROLLCODE" Hidden="yes" />
 		<!-- No Value: this is only ever set at runtime by
 		     WriteDeployJson.SetParam below. Declared here purely to carry
 		     Hidden="yes" for the reason explained above. -->
