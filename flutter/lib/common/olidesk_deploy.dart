@@ -18,9 +18,12 @@ import '../utils/http_service.dart' as http_svc;
 // DEVICENAME) as msiexec properties (see
 // res/msi/CustomActions/DeployConfig.cpp); a plain interactive install
 // with no such properties gets no file, and no attempt is made here --
-// the interactive "Register this device" dialog handles that case
+// the interactive onboarding wizard's Register step handles that case
 // entirely (see main.dart, which calls tryOlideskAutoRegister() followed
-// by maybeShowOlideskRegisterDialog()).
+// by maybeShowOlideskOnboardingDialog() -- see
+// widgets/olidesk_register_device.dart for the full wizard, which also
+// covers the permanent password and 2FA steps this file has nothing to do
+// with).
 //
 // Older versions of this installer baked a long-lived DEPLOY_TOKEN into
 // every client MSI and drove the whole flow (device name, group, network

@@ -149,12 +149,12 @@ void runMainApp(bool startService) async {
   // olidesk-deploy.json next to the executable (see olidesk_deploy.dart).
   // Runs after startService() so the background service (and the RustDesk
   // id it serves over IPC) is already coming up by the time this polls it.
-  // The interactive "Register this device" fallback (olidesk_register_
-  // device.dart) is triggered separately below, once the main window is
-  // actually shown and sized -- not here, since this runs before runApp()
-  // even builds the widget tree, and showing a dialog that early rendered
-  // it squeezed into whatever tiny pre-restoration window size the OS
-  // handed out before windowManager.show()/restoreWindowPosition ran.
+  // The interactive onboarding wizard (olidesk_register_device.dart) is
+  // triggered separately below, once the main window is actually shown and
+  // sized -- not here, since this runs before runApp() even builds the
+  // widget tree, and showing a dialog that early rendered it squeezed into
+  // whatever tiny pre-restoration window size the OS handed out before
+  // windowManager.show()/restoreWindowPosition ran.
   unawaited(tryOlideskAutoRegister());
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
@@ -182,11 +182,17 @@ void runMainApp(bool startService) async {
       windowManager.focus();
       // Move registration of active main window here to prevent from async visible check.
       rustDeskWinManager.registerActiveWindow(kWindowMainId);
-      // Only once the window is actually shown at its real (restored) size
-      // -- see the comment on tryOlideskAutoRegister's call above for why
-      // not earlier. A no-op if tryOlideskAutoRegister already registered
-      // the device silently by now.
-      unawaited(maybeShowOlideskRegisterDialog());
+      // Client build only: the admin build has a full Settings page, so
+      // this onboarding wizard (register / set a permanent password /
+      // enable 2FA) has no reason to run there -- kOlideskClientBuild is a
+      // compile-time constant, so this whole call is dead-code-eliminated
+      // from the admin build entirely, same as the address book is. Only
+      // once the window is actually shown at its real (restored) size --
+      // see the comment on tryOlideskAutoRegister's call above for why not
+      // earlier. A no-op if the wizard already ran to completion before.
+      if (kOlideskClientBuild) {
+        unawaited(maybeShowOlideskOnboardingDialog());
+      }
     }
     windowManager.setOpacity(1);
     windowManager.setTitle(getWindowName());
