@@ -20,6 +20,16 @@
 		<CustomAction Id="InstallPrinter" DllEntry="InstallPrinter" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
 		<CustomAction Id="UninstallPrinter" DllEntry="UninstallPrinter" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
 
+		<!-- Uninstall "keep or wipe settings" choice (see
+		     CustomActions/UninstallCleanup.cpp): applies to both builds,
+		     not just the client one, so these sit outside the `<?ifdef
+		     ApiUrl?>` guards below. Return="check" on the prompt: unlike
+		     every other CA in this file, a Cancel here (ERROR_INSTALL_
+		     USEREXIT) is meant to actually abort the uninstall, so its
+		     return code can't be Return="ignore" like the rest. -->
+		<CustomAction Id="PromptKeepSettings" DllEntry="PromptKeepSettings" Impersonate="yes" Execute="immediate" Return="check" BinaryRef="Custom_Actions_Dll"/>
+		<CustomAction Id="RemoveOlideskSettings" DllEntry="RemoveOlideskSettings" Impersonate="no" Execute="deferred" Return="ignore" BinaryRef="Custom_Actions_Dll"/>
+
 		<?ifdef ApiUrl?>
 		<!-- Writes olidesk-deploy.json for a silent install's ENROLLCODE/
 		     GROUP/DEVICENAME properties (client build only); see

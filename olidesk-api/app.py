@@ -637,9 +637,31 @@ def register_client():
         "SELECT id FROM clients WHERE olidesk_id = ?", (olidesk_id,)
     ).fetchone()
 
+    # No exact olidesk_id match: a machine whose settings (including its
+    # RustDesk id) were wiped -- e.g. an uninstall that removed
+    # %APPDATA%\Olidesk, or a factory reset -- gets a brand new id on
+    # reinstall, and would otherwise show up as a second, stale-looking
+    # entry next to its old one under the same hostname. Match the most
+    # recently seen client with the same hostname instead and update it in
+    # place, olidesk_id included, rather than create a duplicate.
+    matched_by_hostname = False
+    if not existing and hostname:
+        existing = db.execute(
+            "SELECT id FROM clients WHERE hostname IS NOT NULL AND lower(hostname) = lower(?) "
+            "ORDER BY last_seen DESC LIMIT 1",
+            (hostname,),
+        ).fetchone()
+        matched_by_hostname = existing is not None
+
     if existing:
         client_id = existing["id"]
         fields = {"last_seen": now}
+        if matched_by_hostname:
+            fields["olidesk_id"] = olidesk_id
+            log.info(
+                "client re-matched by hostname: hostname=%s old_client_id=%s new_olidesk_id=%s",
+                hostname, client_id, olidesk_id,
+            )
         if hostname:
             fields["hostname"] = hostname
             fields["name"] = hostname

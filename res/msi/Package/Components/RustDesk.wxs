@@ -32,6 +32,17 @@
 		<CustomAction Id="RemoveAmyuniIdd.SetParam" Return="check" Property="RemoveAmyuniIdd" Value="[INSTALLFOLDER_INNER]" />
 		<CustomAction Id="InstallPrinter.SetParam" Return="check" Property="InstallPrinter" Value="[INSTALLFOLDER_INNER]" />
 
+		<!-- Uninstall "keep or wipe settings" choice (see
+		     CustomActions/UninstallCleanup.cpp). All-uppercase so it's
+		     settable from the command line for a silent uninstall, e.g.
+		     msiexec /x {ProductCode} KEEPSETTINGS=0 /qn. No Value: left
+		     genuinely unset by default (rather than defaulting to "1" here)
+		     so PromptKeepSettings can tell "explicitly passed on the
+		     command line" apart from "nothing passed, ask interactively or
+		     default silently": see its own comment for exactly how those
+		     two cases differ. -->
+		<Property Id="KEEPSETTINGS" />
+
 		<?ifdef ApiUrl?>
 		<!-- Silent-install deployment support (client build only). ApiUrl is
 		     a compile-time constant baked in by preprocess.py (see
@@ -130,6 +141,16 @@
 			<Custom Action="AddFirewallRules.SetParam" Before="AddFirewallRules" Condition="NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE)"/>
 
 			<Custom Action="AddRegSoftwareSASGeneration" Before="InstallFinalize" Condition="NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE) AND (NOT CC_CONNECTION_TYPE=&quot;outgoing&quot;)"/>
+
+			<!-- Uninstall "keep or wipe settings" choice. Condition is a real
+			     uninstall only (Installed AND REMOVE=&quot;ALL&quot; AND NOT
+			     UPGRADINGPRODUCTCODE): never during an upgrade's own
+			     remove-old-then-install-new step, which would otherwise wipe
+			     every machine's settings on every version bump. Scheduled as
+			     early as InstallInitialize so a Cancel aborts before any
+			     removal work (files, registry, service) has started. -->
+			<Custom Action="PromptKeepSettings" After="InstallInitialize" Condition="Installed AND REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+			<Custom Action="RemoveOlideskSettings" Before="RemoveFiles" Condition="Installed AND REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND KEEPSETTINGS&lt;&gt;&quot;1&quot;" />
 
 			<?ifdef ApiUrl?>
 			<!-- Also cover silent installs (msiexec /qn), which never run

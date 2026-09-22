@@ -246,4 +246,43 @@ Other things to check:
 - Re-registering an ID that's already in the address book updates its
   hostname/platform/group in place rather than creating a duplicate, so
   it's safe to reuse the same deploy package/code if you reinstall a
-  machine.
+  machine. If a machine's local settings were wiped and it gets a brand
+  new RustDesk id on reinstall (see "Uninstalling" below), the server
+  matches it to its existing entry by hostname instead of creating a
+  second one, as long as the hostname hasn't changed.
+
+## Uninstalling
+
+Uninstalling asks whether to keep or wipe this machine's Olidesk settings
+(device ID, registration state, local config/logs) — kept by default, so a
+routine reinstall (repair, version bump via a manual uninstall+install
+instead of the MSI's own upgrade handling, etc.) doesn't lose its identity
+and silently re-register as a "new" device. Wipe it deliberately when you
+actually want a clean slate, e.g. repurposing a machine.
+
+- **From an elevated MSI file** (`msiexec /x olidesk-client-1.4.99-x86_64.msi`)
+  **or the command line in general**: a small native prompt appears (not a
+  WiX dialog — see the comment in
+  `res/msi/CustomActions/UninstallCleanup.cpp` for why) with a checkbox,
+  checked by default. Cancel aborts the uninstall entirely, same as
+  declining any other confirmation.
+- **From Windows Settings → Apps**: the same prompt appears. WiX's own
+  dialogs are well known not to show there even without a `/q` override on
+  the uninstall string, but a native prompt shown directly from a custom
+  action doesn't depend on that sequence at all, so it isn't affected.
+- **Silent uninstall**: `msiexec /x {ProductCode} KEEPSETTINGS=0 /qn`
+  wipes without any prompt; omit `KEEPSETTINGS` (or pass `KEEPSETTINGS=1`)
+  to keep, also without a prompt. A genuinely silent uninstall
+  (`/qn` with no `KEEPSETTINGS` override at all) defaults to keeping
+  settings rather than showing a dialog an unattended script isn't
+  expecting.
+
+Wiping removes, machine-wide: every user profile's
+`%APPDATA%\Olidesk` (config, device ID/keypair, local options), the
+Windows service's own copy under
+`C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\Olidesk`,
+`C:\ProgramData\Olidesk` (including any recordings), and the app's
+`HKLM\SOFTWARE\Classes\.olidesk`/`olidesk` registry keys. It does not
+touch anything under `C:\ProgramData\RustDesk\` (a separate, unrebranded
+staging path the app itself already treats as unsafe to delete) or the
+`SoftwareSASGeneration` system policy value (unrelated to device identity).

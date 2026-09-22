@@ -207,6 +207,20 @@ UINT __stdcall RemoveRuntimeGeneratedFiles(
 
     WcaLog(LOGMSG_STANDARD, "Removing runtime-generated files from install folder: %ls", installFolder);
     DeleteRuntimeGeneratedFile(installFolder, L"RuntimeBroker_rustdesk.exe");
+    // Unconditional, regardless of the KEEPSETTINGS uninstall choice (see
+    // CustomActions/UninstallCleanup.cpp): a deploy config/log sitting in
+    // the install folder isn't "settings to keep for a future reinstall"
+    // in the same sense device ID/registration state is -- it's a
+    // write-once file the app deletes itself after successful
+    // registration (see olidesk_deploy.dart), so if it's still here at
+    // uninstall time, registration either already finished (nothing to
+    // keep) or never happened (nothing worth keeping -- enrollment codes
+    // are short-lived and a future reinstall needs a fresh decision
+    // anyway). Also lets MSI's own RemoveFolder actually empty and remove
+    // the install folder, which it otherwise can't if these untracked
+    // files are still sitting in it.
+    DeleteRuntimeGeneratedFile(installFolder, L"olidesk-deploy.json");
+    DeleteRuntimeGeneratedFile(installFolder, L"olidesk-deploy.log");
 
 LExit:
     ReleaseStr(pwzData);
