@@ -23,6 +23,14 @@ Future<void> maybeShowOlideskRegisterDialog() async {
   }
   final ctx = await _waitForNavigatorContext();
   if (ctx == null || !ctx.mounted) return;
+  // The caller (main.dart) only invokes this after windowManager.show(),
+  // but that's an async OS-level resize -- give Flutter's own layout a
+  // couple of frames to actually pick up the real window size before
+  // measuring a dialog against it. Without this, an early call could still
+  // land mid-resize and render the dialog squeezed into a tiny transient
+  // size, same as calling this before window show did.
+  await Future.delayed(const Duration(milliseconds: 300));
+  if (!ctx.mounted) return;
   // Re-check right before showing: the silent path (or a previous instance
   // of this dialog, on a fast restart) could have registered in the
   // meantime.
@@ -190,7 +198,13 @@ class _RegisterDeviceDialogState extends State<_RegisterDeviceDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Register this device'),
-      content: SizedBox(
+      // SingleChildScrollView: defense in depth against the dialog being
+      // shown while the main window is still smaller than this content
+      // needs (see the delay in maybeShowOlideskRegisterDialog for the
+      // actual fix) -- scrolls instead of the actions row overlapping the
+      // content if that ever happens again for some other reason.
+      content: SingleChildScrollView(
+        child: SizedBox(
         width: 380,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -287,6 +301,7 @@ class _RegisterDeviceDialogState extends State<_RegisterDeviceDialog> {
                   style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
             ],
           ],
+        ),
         ),
       ),
       actions: [

@@ -145,18 +145,17 @@ void runMainApp(bool startService) async {
     bind.pluginSyncUi(syncTo: kAppTypeMain);
     bind.pluginListReload();
   }
-  // Fire-and-forget: tries silent registration first (a no-op unless a
-  // deployment package dropped olidesk-deploy.json next to the executable,
-  // see olidesk_deploy.dart), then falls back to the interactive "Register
-  // this device" dialog if the device still isn't registered afterwards
-  // (olidesk_register_device.dart) -- covers both the silent-install and
-  // plain-interactive-install cases with one call. Runs after startService()
-  // so the background service (and the RustDesk id it serves over IPC) is
-  // already coming up by the time either path polls it.
-  unawaited(() async {
-    await tryOlideskAutoRegister();
-    await maybeShowOlideskRegisterDialog();
-  }());
+  // Fire-and-forget: a no-op unless a deployment package dropped
+  // olidesk-deploy.json next to the executable (see olidesk_deploy.dart).
+  // Runs after startService() so the background service (and the RustDesk
+  // id it serves over IPC) is already coming up by the time this polls it.
+  // The interactive "Register this device" fallback (olidesk_register_
+  // device.dart) is triggered separately below, once the main window is
+  // actually shown and sized -- not here, since this runs before runApp()
+  // even builds the widget tree, and showing a dialog that early rendered
+  // it squeezed into whatever tiny pre-restoration window size the OS
+  // handed out before windowManager.show()/restoreWindowPosition ran.
+  unawaited(tryOlideskAutoRegister());
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
@@ -183,6 +182,11 @@ void runMainApp(bool startService) async {
       windowManager.focus();
       // Move registration of active main window here to prevent from async visible check.
       rustDeskWinManager.registerActiveWindow(kWindowMainId);
+      // Only once the window is actually shown at its real (restored) size
+      // -- see the comment on tryOlideskAutoRegister's call above for why
+      // not earlier. A no-op if tryOlideskAutoRegister already registered
+      // the device silently by now.
+      unawaited(maybeShowOlideskRegisterDialog());
     }
     windowManager.setOpacity(1);
     windowManager.setTitle(getWindowName());
