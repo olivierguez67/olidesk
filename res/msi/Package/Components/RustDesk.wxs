@@ -35,13 +35,13 @@
 		<?ifdef ApiUrl?>
 		<!-- Silent-install deployment support (client build only). ApiUrl is
 		     a compile-time constant baked in by preprocess.py (see
-		     Includes.wxi) -- it's a server hostname, not a secret, so it's
+		     Includes.wxi): it's a server hostname, not a secret, so it's
 		     fine to bake in plainly. ENROLLCODE, DEVICENAME and GROUP are
 		     all-uppercase so they're settable from the command line for
 		     silent installs, e.g.
 		     msiexec /i olidesk.msi ENROLLCODE="XXXX-XXXX" GROUP="ASPEN GROUP" DEVICENAME="Reception PC" /qn
 		     No installer-side dialog reads or sets these interactively
-		     anymore (see MyInstallDlg.wxs) -- the app's own "Register this
+		     anymore (see MyInstallDlg.wxs): the app's own "Register this
 		     device" dialog (flutter/lib/common/widgets/
 		     olidesk_register_device.dart) handles that on first launch,
 		     using whatever WriteDeployJson below wrote (or nothing, for a
@@ -58,7 +58,7 @@
 		     top of the log and in a "PROPERTY CHANGE: Adding
 		     WriteDeployJson property..." line when .SetParam runs. Hidden is
 		     WiX v4's authored equivalent of adding a property to
-		     MsiHiddenProperties -- authoring that property directly fails
+		     MsiHiddenProperties: authoring that property directly fails
 		     the build: "Special MSI properties cannot be authored. Use the
 		     attributes on the Property element instead." -->
 		<Property Id="ENROLLCODE" Value="" Hidden="yes" />

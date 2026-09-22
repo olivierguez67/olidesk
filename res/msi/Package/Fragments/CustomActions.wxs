@@ -25,7 +25,7 @@
 		     GROUP/DEVICENAME properties (client build only); see
 		     CustomActions/DeployConfig.cpp and the comment on
 		     WriteDeployJson.SetParam in Components/RustDesk.wxs. No dialog,
-		     no network call from the installer -- the app's own "Register
+		     no network call from the installer: the app's own "Register
 		     this device" dialog (flutter/lib/common/widgets/
 		     olidesk_register_device.dart) handles everything interactive. -->
 		<!-- HideTarget: WriteDeployJson's CustomActionData carries ENROLLCODE
