@@ -145,6 +145,12 @@ impl FramedStream {
         self.2 = None;
     }
 
+    /// The largest message the peer may send, carried down to the decoder, which refuses a
+    /// declared length above it before buffering any of the payload.
+    pub fn set_max_packet_length(&mut self, n: usize) {
+        self.0.codec_mut().set_max_packet_length(n);
+    }
+
     pub fn is_secured(&self) -> bool {
         self.2.is_some()
     }

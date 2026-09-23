@@ -34,6 +34,27 @@ impl Stream {
         }
     }
 
+    /// The largest message the peer may send. Lowered before authorization, where nothing a peer
+    /// legitimately sends is large, so an unauthenticated connection cannot make us hold more than
+    /// that. `usize::MAX` restores the transport's own default.
+    ///
+    /// Set it before the first read of untrusted data. Lowering it later does not constrain a
+    /// message already in progress.
+    ///
+    /// NOTE: only the TCP path is bounded here. Upstream also caps the WebSocket path, but that
+    /// reaches tungstenite's config, which needs their fork of tokio-tungstenite -- v0.26.2
+    /// exposes `get_config` and no `set_config`. Until that fork is vendored, a WebSocket peer is
+    /// still bounded only by tungstenite's own 64 MiB ceiling.
+    #[inline]
+    pub fn set_max_packet_length(&mut self, n: usize) {
+        match self {
+            #[cfg(feature = "webrtc")]
+            Stream::WebRTC(_) => {}
+            Stream::WebSocket(_) => {}
+            Stream::Tcp(s) => s.set_max_packet_length(n),
+        }
+    }
+
     #[inline]
     pub async fn send_bytes(&mut self, bytes: bytes::Bytes) -> ResultType<()> {
         match self {
