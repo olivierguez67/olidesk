@@ -71,11 +71,6 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use crate::virtual_display_manager;
 pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 
-const FAILURE_IDX_ID_WHITELIST: usize = 2;
-// How long a rejection counts, so also how long a blocked address stays blocked. Longer
-// throttles enumeration harder; shorter limits collateral on whitelisted neighbours.
-const ID_WHITELIST_FAILURE_DECAY_MINUTES: i32 = 10;
-
 /// A connection not authorized within this long of starting is closed, however alive it
 /// keeps itself: a wrong password, a pending 2FA, an accept prompt or an admin-terminal
 /// credential prompt still unanswered. The controller reconnects on its own and the prompt
@@ -182,10 +177,8 @@ async fn login_deadline(authorized: bool, started: Instant) {
 lazy_static::lazy_static! {
     // Connections between accept and authorization, oldest first; see admit_unauthorized.
     static ref UNAUTHORIZED_CONNS: Mutex<Vec<(i32, IpAddr, Arc<UnauthorizedShared>)>> = Default::default();
-    // [0] password, [1] 2FA, [2] ID whitelist.
-    // Bucket 2 is separate so its rejections do not touch the password / 2FA budgets. It is
-    // decayed in `check_id_whitelist` and cleared on auth, never on a bare id match.
-    static ref LOGIN_FAILURES: [Arc::<Mutex<HashMap<String, (i32, i32, i32)>>>; 3] = Default::default();
+    // [0] password, [1] 2FA.
+    static ref LOGIN_FAILURES: [Arc::<Mutex<HashMap<String, (i32, i32, i32)>>>; 2] = Default::default();
     static ref SESSIONS: Arc::<Mutex<HashMap<SessionKey, Session>>> = Default::default();
     // Remembers peers that recently passed 2FA, so a dropped connection does not force a new code.
     // In memory only: cleared whenever the service restarts.
@@ -1691,9 +1684,6 @@ impl Connection {
         }
         self.authorized = true;
         self.unauthorized_id = None;
-        // Releases the budget `check_id_whitelist` charges against this address: only a peer
-        // that got this far proved more than a self-reported id.
-        self.clear_id_whitelist_failures();
         if need_2fa {
             // Passed the gate above without entering a code, so keep the grace period running
             // from this connection's activity instead of letting it expire mid-session.
@@ -6633,113 +6623,8 @@ mod test {
         assert!(wildcard_match(" 123456789 ", "123456789"));
     }
 
-    #[test]
-    fn test_decay_stale_failures() {
-        let entry = |minute: i32| (minute, 1, 40);
-        let keys = ["ip".to_string(), "p64".to_string(), "absent".to_string()];
-        let mut m: HashMap<String, (i32, i32, i32)> = HashMap::new();
-        m.insert("ip".to_string(), entry(100));
-        m.insert("p64".to_string(), entry(160));
-        m.insert("untouched".to_string(), entry(100));
 
-        // Exactly at the window: forgotten. Still inside it: kept.
-        decay_stale_failures(&mut m, &keys, 160, 60);
-        assert!(!m.contains_key("ip"));
-        assert!(m.contains_key("p64"));
-        // Keys that were not passed in are never visited, absent ones are a no-op.
-        assert!(m.contains_key("untouched"));
 
-        // One minute short of the window keeps the entry.
-        decay_stale_failures(&mut m, &keys, 219, 60);
-        assert!(m.contains_key("p64"));
-        decay_stale_failures(&mut m, &keys, 220, 60);
-        assert!(!m.contains_key("p64"));
-
-        // A clock that jumped backwards must not drop anything.
-        m.insert("ip".to_string(), entry(500));
-        decay_stale_failures(&mut m, &keys, 0, 60);
-        assert!(m.contains_key("ip"));
-    }
-
-    #[test]
-    fn test_clear_failures_drops_shared_prefixes() {
-        // On IPv6 a whitelisted peer usually has no entry of its own, while the shared
-        // prefixes that block it do. Clearing must not depend on the per-address entry.
-        let mut m: HashMap<String, (i32, i32, i32)> = HashMap::new();
-        m.insert("p64".to_string(), (100, 1, 55));
-        m.insert("p56".to_string(), (100, 1, 75));
-        m.insert("p48".to_string(), (100, 1, 95));
-        m.insert("someone-else".to_string(), (100, 1, 95));
-        let keys = ["ip", "p64", "p56", "p48"].map(|k| k.to_string());
-
-        clear_failures(&mut m, &keys);
-
-        for key in ["p64", "p56", "p48"] {
-            assert!(!m.contains_key(key), "{key} should have been cleared");
-        }
-        // Keys belonging to other peers are left alone.
-        assert!(m.contains_key("someone-else"));
-    }
-
-    #[test]
-    fn test_id_whitelist_allows() {
-        let list = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-
-        // An empty whitelist allows everyone.
-        assert!(id_whitelist_allows(&[], "123456789"));
-
-        // Same server: the peer reports a bare id.
-        assert!(id_whitelist_allows(&list(&["123456789"]), "123456789"));
-        assert!(!id_whitelist_allows(&list(&["123456789"]), "987654321"));
-
-        // Cross server: the peer appends its own server, which must not reject it.
-        assert!(id_whitelist_allows(
-            &list(&["123456789"]),
-            "123456789@example.com:21116"
-        ));
-        // Cross server from web, whose server is a WebSocket URI.
-        assert!(id_whitelist_allows(
-            &list(&["123456789"]),
-            "123456789@wss://example.com:21118/ws/id"
-        ));
-        // A different id is still rejected, suffix or not.
-        assert!(!id_whitelist_allows(
-            &list(&["123456789"]),
-            "987654321@example.com:21116"
-        ));
-
-        // An entry pinned to one server keeps matching that exact form.
-        assert!(id_whitelist_allows(
-            &list(&["123456789@example.com:21116"]),
-            "123456789@example.com:21116"
-        ));
-        assert!(!id_whitelist_allows(
-            &list(&["123456789@example.com:21116"]),
-            "123456789@other.com:21116"
-        ));
-        // ... and no longer matches the bare id, which is the point of pinning.
-        assert!(!id_whitelist_allows(
-            &list(&["123456789@example.com:21116"]),
-            "123456789"
-        ));
-
-        // Wildcards keep working on both forms.
-        assert!(id_whitelist_allows(&list(&["abc*"]), "abcdef"));
-        assert!(id_whitelist_allows(
-            &list(&["abc*"]),
-            "abcdef@example.com:21116"
-        ));
-        assert!(id_whitelist_allows(
-            &list(&["*"]),
-            "123456789@example.com:21116"
-        ));
-
-        // Any entry of the list is enough.
-        assert!(id_whitelist_allows(
-            &list(&["111111111", "123456789", "222222222"]),
-            "123456789@example.com:21116"
-        ));
-    }
 
     #[cfg(target_os = "macos")]
     #[test]
