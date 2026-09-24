@@ -59,6 +59,14 @@ const String kAppTypeDesktopViewCamera = "view camera";
 const String kAppTypeDesktopPortForward = "port forward";
 const String kAppTypeDesktopTerminal = "terminal";
 
+/// The first-launch onboarding wizard (client build only), opened as its
+/// own window (see WindowType.Onboarding in multi_window_manager.dart and
+/// olidesk_register_device.dart) rather than a dialog inside the main
+/// window -- the main window's own default size is too small on common
+/// laptop resolutions for the wizard's content to fit without scrolling
+/// or overlap.
+const String kAppTypeOnboarding = "onboarding";
+
 const String kWindowMainWindowOnTop = "main_window_on_top";
 const String kWindowRefreshCurrentUser = "refresh_current_user";
 const String kWindowGetWindowInfo = "get_window_info";

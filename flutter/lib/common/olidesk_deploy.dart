@@ -20,7 +20,7 @@ import '../utils/http_service.dart' as http_svc;
 // with no such properties gets no file, and no attempt is made here --
 // the interactive onboarding wizard's Register step handles that case
 // entirely (see main.dart, which calls tryOlideskAutoRegister() followed
-// by maybeShowOlideskOnboardingDialog() -- see
+// by maybeOpenOlideskOnboardingWindow() -- see
 // widgets/olidesk_register_device.dart for the full wizard, which also
 // covers the permanent password and 2FA steps this file has nothing to do
 // with).

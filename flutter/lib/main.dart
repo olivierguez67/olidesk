@@ -54,9 +54,6 @@ Future<void> main(List<String> args) async {
   if (args.isNotEmpty && args.first == 'multi_window') {
     kWindowId = int.parse(args[1]);
     stateGlobal.setWindowId(kWindowId!);
-    if (!isMacOS) {
-      WindowController.fromWindowId(kWindowId!).showTitleBar(false);
-    }
     final argument = args[2].isEmpty
         ? <String, dynamic>{}
         : jsonDecode(args[2]) as Map<String, dynamic>;
@@ -65,6 +62,13 @@ Future<void> main(List<String> args) async {
     // Because stateGlobal.windowId is a global value.
     argument['windowId'] = kWindowId;
     kWindowType = type.windowType;
+    // Every other sub-window type keeps the app's frameless custom-chrome
+    // look; the onboarding wizard is a plain utility window with its own
+    // native title bar (standard close/minimize controls) instead, since
+    // it isn't built on the DesktopTab machinery that look depends on.
+    if (!isMacOS && kWindowType != WindowType.Onboarding) {
+      WindowController.fromWindowId(kWindowId!).showTitleBar(false);
+    }
     switch (kWindowType) {
       case WindowType.RemoteDesktop:
         desktopType = DesktopType.remote;
@@ -100,6 +104,13 @@ Future<void> main(List<String> args) async {
           argument,
           kAppTypeDesktopTerminal,
         );
+        break;
+      case WindowType.Onboarding:
+        runMultiWindow(
+          argument,
+          kAppTypeOnboarding,
+        );
+        break;
       default:
         break;
     }
@@ -150,11 +161,11 @@ void runMainApp(bool startService) async {
   // Runs after startService() so the background service (and the RustDesk
   // id it serves over IPC) is already coming up by the time this polls it.
   // The interactive onboarding wizard (olidesk_register_device.dart) is
-  // triggered separately below, once the main window is actually shown and
-  // sized -- not here, since this runs before runApp() even builds the
-  // widget tree, and showing a dialog that early rendered it squeezed into
-  // whatever tiny pre-restoration window size the OS handed out before
-  // windowManager.show()/restoreWindowPosition ran.
+  // triggered separately below, once the main window is shown -- it opens
+  // as its own independent window now (see the comment there), so unlike
+  // when it was a dialog constrained by the main window's own size, timing
+  // relative to that window no longer affects its layout; kept at the same
+  // trigger point anyway since that's already proven to work.
   unawaited(tryOlideskAutoRegister());
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
@@ -186,12 +197,13 @@ void runMainApp(bool startService) async {
       // this onboarding wizard (register / set a permanent password /
       // enable 2FA) has no reason to run there -- kOlideskClientBuild is a
       // compile-time constant, so this whole call is dead-code-eliminated
-      // from the admin build entirely, same as the address book is. Only
-      // once the window is actually shown at its real (restored) size --
-      // see the comment on tryOlideskAutoRegister's call above for why not
-      // earlier. A no-op if the wizard already ran to completion before.
+      // from the admin build entirely, same as the address book is. Opens
+      // as its own window (WindowType.Onboarding), not a dialog inside
+      // this one -- the main window's own default size is too small on
+      // common laptop resolutions for the wizard's content to fit. A no-op
+      // if the wizard already ran to completion before.
       if (kOlideskClientBuild) {
-        unawaited(maybeShowOlideskOnboardingDialog());
+        unawaited(maybeOpenOlideskOnboardingWindow());
       }
     }
     windowManager.setOpacity(1);
@@ -219,8 +231,14 @@ void runMultiWindow(
 ) async {
   await initEnv(appType);
   final title = getWindowName();
-  // set prevent close to true, we handle close event manually
-  WindowController.fromWindowId(kWindowId!).setPreventClose(true);
+  // set prevent close to true, we handle close event manually -- except
+  // for the onboarding wizard, a plain one-shot window with no
+  // DesktopTab/WindowListener machinery to handle that manual close, so it
+  // just uses the OS's normal close behavior instead (see the comment on
+  // the showTitleBar(false) call above for why it also skips that).
+  if (appType != kAppTypeOnboarding) {
+    WindowController.fromWindowId(kWindowId!).setPreventClose(true);
+  }
   if (isMacOS) {
     disableWindowMovable(kWindowId);
   }
@@ -252,6 +270,9 @@ void runMultiWindow(
       widget = DesktopTerminalScreen(
         params: argument,
       );
+      break;
+    case kAppTypeOnboarding:
+      widget = const OlideskOnboardingWindow();
       break;
     default:
       // no such appType
@@ -301,6 +322,12 @@ void runMultiWindow(
       break;
     case kAppTypeDesktopTerminal:
       await restoreWindowPosition(WindowType.Terminal, windowId: kWindowId!);
+      break;
+    case kAppTypeOnboarding:
+      // No restoreWindowPosition: newOnboardingWindow() (multi_window_
+      // manager.dart) already set a fixed 900x700 centered frame at
+      // creation time, and a one-shot wizard has no reason to remember a
+      // size/position across runs the way a resizable session window does.
       break;
     default:
       // no such appType

@@ -1,13 +1,16 @@
 import 'dart:async';
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../common.dart';
 import '../../consts.dart';
+import '../../main.dart' show kWindowId;
 import '../../models/platform_model.dart';
 import '../../models/server_model.dart' show kUsePermanentPassword;
+import '../../utils/multi_window_manager.dart';
 import '../olidesk_deploy.dart';
 import 'custom_password.dart';
 import 'dialog.dart' show Dialog2FaField;
@@ -17,72 +20,108 @@ import 'dialog.dart' show Dialog2FaField;
 // kOlideskClientBuild): Register (enrollment code, optional/skippable) ->
 // Password (mandatory) -> Two-factor authentication (mandatory).
 //
+// Runs as its own window (WindowType.Onboarding, ~900x700), not a dialog
+// inside the main window. A real machine at 1366x768 with the client's
+// small default window size couldn't fit this content without scrolling
+// or the action buttons overlapping fields -- constraining it to whatever
+// the main window happened to be sized at was the actual bug, not
+// anything about the content's own layout. A dedicated window sidesteps
+// that entirely: fixed size, set once at creation
+// (RustDeskMultiWindowManager.newOnboardingWindow), independent of
+// whatever the main window is doing.
+//
 // The client build hides the whole Settings page (address book, and
 // everything else), so this wizard is the ONLY place a permanent password
 // or 2FA can ever be set on a client install -- hence Password/2FA aren't
 // skippable the way Register is. "Skip" on the Register step only skips
 // address-book registration; it advances to Password, never closes the
-// wizard.
-//
-// Shown once per app start if not yet "onboarded" (password + 2FA both
-// done), independent of registration status -- see
-// kOlideskOnboardedOptionKey. Triggered from main.dart, after the main
-// window is actually shown (see the comment there for why timing matters).
+// window.
 // ---------------------------------------------------------------------------
 
 const kOlideskOnboardedOptionKey = 'olidesk-onboarded';
 const _kNewGroupSentinel = '__add_new_group__';
 
-Future<void> maybeShowOlideskOnboardingDialog() async {
+Future<void> maybeOpenOlideskOnboardingWindow() async {
   if (bind.mainGetLocalOption(key: kOlideskOnboardedOptionKey) == 'Y') {
     return;
   }
-  final ctx = await _waitForNavigatorContext();
-  if (ctx == null || !ctx.mounted) return;
-  // See the equivalent comment in main.dart: give the OS-level window
-  // resize a couple of frames to actually land in Flutter's own layout
-  // before measuring a dialog against it.
-  await Future.delayed(const Duration(milliseconds: 300));
-  if (!ctx.mounted) return;
-  if (bind.mainGetLocalOption(key: kOlideskOnboardedOptionKey) == 'Y') {
-    return;
-  }
-  final alreadyRegistered =
-      bind.mainGetLocalOption(key: kOlideskRegisteredOptionKey) == 'Y';
-  await showDialog(
-    context: ctx,
-    barrierDismissible: false,
-    builder: (_) => _OnboardingDialog(startAtPassword: alreadyRegistered),
-  );
+  await rustDeskWinManager.newOnboardingWindow();
 }
 
-Future<BuildContext?> _waitForNavigatorContext() async {
-  for (var i = 0; i < 120; i++) {
-    final ctx = globalKey.currentContext;
-    if (ctx != null) return ctx;
-    await Future.delayed(const Duration(milliseconds: 250));
+void _closeThisWindow() {
+  if (kWindowId == null) return;
+  WindowController.fromWindowId(kWindowId!).close();
+}
+
+// ---------------------------------------------------------------------------
+// Shared step chrome: an AppBar-titled body area with plenty of room (this
+// window is a fixed ~900x700, set at creation -- see
+// RustDeskMultiWindowManager.newOnboardingWindow), and actions pinned to a
+// dedicated bottom bar that can never overlap the body's fields. The
+// SingleChildScrollView is defensive only: content is sized to fit
+// comfortably without ever needing to actually scroll.
+// ---------------------------------------------------------------------------
+
+class _WizardScaffold extends StatelessWidget {
+  final String title;
+  final Widget body;
+  final List<Widget> actions;
+  const _WizardScaffold({
+    required this.title,
+    required this.body,
+    required this.actions,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title), automaticallyImplyLeading: false),
+      body: Padding(
+        padding: const EdgeInsets.all(28),
+        child: SingleChildScrollView(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 620),
+              child: body,
+            ),
+          ),
+        ),
+      ),
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            for (var i = 0; i < actions.length; i++) ...[
+              if (i > 0) const SizedBox(width: 12),
+              actions[i],
+            ],
+          ],
+        ),
+      ),
+    );
   }
-  return null;
+}
+
+class OlideskOnboardingWindow extends StatefulWidget {
+  const OlideskOnboardingWindow({super.key});
+
+  @override
+  State<OlideskOnboardingWindow> createState() => _OlideskOnboardingWindowState();
 }
 
 enum _Step { register, password, twoFa }
 
-class _OnboardingDialog extends StatefulWidget {
-  final bool startAtPassword;
-  const _OnboardingDialog({required this.startAtPassword});
-
-  @override
-  State<_OnboardingDialog> createState() => _OnboardingDialogState();
-}
-
-class _OnboardingDialogState extends State<_OnboardingDialog> {
+class _OlideskOnboardingWindowState extends State<OlideskOnboardingWindow> {
   late _Step _step;
   late final TextEditingController _deviceNameCtrl;
 
   @override
   void initState() {
     super.initState();
-    _step = widget.startAtPassword ? _Step.password : _Step.register;
+    final alreadyRegistered =
+        bind.mainGetLocalOption(key: kOlideskRegisteredOptionKey) == 'Y';
+    _step = alreadyRegistered ? _Step.password : _Step.register;
     _deviceNameCtrl = TextEditingController(text: olideskHostname());
     unawaited(_prefillDeviceName());
   }
@@ -119,7 +158,7 @@ class _OnboardingDialogState extends State<_OnboardingDialog> {
           onDone: () async {
             await bind.mainSetLocalOption(
                 key: kOlideskOnboardedOptionKey, value: 'Y');
-            if (context.mounted) Navigator.of(context).pop();
+            _closeThisWindow();
           },
         );
     }
@@ -263,108 +302,98 @@ class _RegisterStepState extends State<_RegisterStep> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Register this device (1 of 3)'),
-      content: SingleChildScrollView(
-        child: SizedBox(
-          width: 380,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Enter the enrollment code your administrator gave you to add '
-                'this device to the address book.',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _codeCtrl,
-                autofocus: true,
-                textCapitalization: TextCapitalization.characters,
-                decoration: InputDecoration(
-                  labelText: 'Enrollment code',
-                  hintText: 'XXXX-XXXX',
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                  errorText: _codeError.isEmpty ? null : _codeError,
-                  suffixIcon: _validatingCode
-                      ? const Padding(
-                          padding: EdgeInsets.all(14),
-                          child: SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : (_codeValid
-                          ? const Icon(Icons.check_circle, color: Colors.green)
-                          : null),
-                ),
-                onChanged: _onCodeChanged,
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: widget.deviceNameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Device name',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-              const SizedBox(height: 14),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text('Client group', style: TextStyle(fontSize: 12)),
-              ),
-              const SizedBox(height: 4),
-              if (_selectedGroup == _kNewGroupSentinel)
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _newGroupCtrl,
-                        autofocus: true,
-                        decoration: const InputDecoration(
-                          hintText: 'New group name',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () => setState(() => _selectedGroup = ''),
-                      child: const Text('Back'),
-                    ),
-                  ],
-                )
-              else
-                DropdownButtonFormField<String>(
-                  value: _selectedGroup,
-                  isExpanded: true,
-                  hint: Text(_codeValid ? '(none)' : 'Enter a valid code first'),
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: [
-                    const DropdownMenuItem(value: '', child: Text('(none)')),
-                    ..._groups.map((g) => DropdownMenuItem(value: g, child: Text(g))),
-                    const DropdownMenuItem(
-                      value: _kNewGroupSentinel,
-                      child: Text('+ Add new group...'),
-                    ),
-                  ],
-                  onChanged: !_codeValid ? null : (v) => setState(() => _selectedGroup = v),
-                ),
-              if (_registerError.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Text(_registerError,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-              ],
-            ],
+    return _WizardScaffold(
+      title: 'Register this device (1 of 3)',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Enter the enrollment code your administrator gave you to add '
+            'this device to the address book.',
+            style: TextStyle(fontSize: 14),
           ),
-        ),
+          const SizedBox(height: 20),
+          TextField(
+            controller: _codeCtrl,
+            autofocus: true,
+            textCapitalization: TextCapitalization.characters,
+            decoration: InputDecoration(
+              labelText: 'Enrollment code',
+              hintText: 'XXXX-XXXX',
+              border: const OutlineInputBorder(),
+              errorText: _codeError.isEmpty ? null : _codeError,
+              suffixIcon: _validatingCode
+                  ? const Padding(
+                      padding: EdgeInsets.all(14),
+                      child: SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : (_codeValid
+                      ? const Icon(Icons.check_circle, color: Colors.green)
+                      : null),
+            ),
+            onChanged: _onCodeChanged,
+          ),
+          const SizedBox(height: 20),
+          TextField(
+            controller: widget.deviceNameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Device name',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text('Client group', style: TextStyle(fontSize: 13)),
+          ),
+          const SizedBox(height: 6),
+          if (_selectedGroup == _kNewGroupSentinel)
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _newGroupCtrl,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      hintText: 'New group name',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: () => setState(() => _selectedGroup = ''),
+                  child: const Text('Back'),
+                ),
+              ],
+            )
+          else
+            DropdownButtonFormField<String>(
+              value: _selectedGroup,
+              isExpanded: true,
+              hint: Text(_codeValid ? '(none)' : 'Enter a valid code first'),
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('(none)')),
+                ..._groups.map((g) => DropdownMenuItem(value: g, child: Text(g))),
+                const DropdownMenuItem(
+                  value: _kNewGroupSentinel,
+                  child: Text('+ Add new group...'),
+                ),
+              ],
+              onChanged: !_codeValid ? null : (v) => setState(() => _selectedGroup = v),
+            ),
+          if (_registerError.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(_registerError,
+                style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+          ],
+        ],
       ),
       actions: [
         TextButton(
@@ -462,80 +491,75 @@ class _PasswordStepState extends State<_PasswordStep> {
   @override
   Widget build(BuildContext context) {
     final maxLength = bind.mainMaxEncryptLen();
-    return AlertDialog(
-      title: const Text('Set a permanent password (2 of 3)'),
-      content: SizedBox(
-        width: 380,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'This password is required to remote-control this device. It '
-              'can only be set here — the client has no Settings page.',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: _passCtrl,
-              autofocus: true,
-              obscureText: _obscure1,
-              maxLength: maxLength,
-              decoration: InputDecoration(
-                labelText: 'Password',
-                border: const OutlineInputBorder(),
-                isDense: true,
-                suffixIcon: IconButton(
-                  icon: Icon(_obscure1 ? Icons.visibility : Icons.visibility_off),
-                  onPressed: () => setState(() => _obscure1 = !_obscure1),
-                ),
+    return _WizardScaffold(
+      title: 'Set a permanent password (2 of 3)',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'This password is required to remote-control this device. It '
+            'can only be set here — the client has no Settings page.',
+            style: TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 20),
+          TextField(
+            controller: _passCtrl,
+            autofocus: true,
+            obscureText: _obscure1,
+            maxLength: maxLength,
+            decoration: InputDecoration(
+              labelText: 'Password',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: Icon(_obscure1 ? Icons.visibility : Icons.visibility_off),
+                onPressed: () => setState(() => _obscure1 = !_obscure1),
               ),
-              onChanged: (v) {
-                _rxPass.value = v.trim();
-                setState(() => _errMsg = '');
-              },
             ),
-            PasswordStrengthIndicator(password: _rxPass),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _confirmCtrl,
-              obscureText: _obscure2,
-              maxLength: maxLength,
-              decoration: InputDecoration(
-                labelText: 'Confirm password',
-                border: const OutlineInputBorder(),
-                isDense: true,
-                suffixIcon: IconButton(
-                  icon: Icon(_obscure2 ? Icons.visibility : Icons.visibility_off),
-                  onPressed: () => setState(() => _obscure2 = !_obscure2),
-                ),
+            onChanged: (v) {
+              _rxPass.value = v.trim();
+              setState(() => _errMsg = '');
+            },
+          ),
+          PasswordStrengthIndicator(password: _rxPass),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _confirmCtrl,
+            obscureText: _obscure2,
+            maxLength: maxLength,
+            decoration: InputDecoration(
+              labelText: 'Confirm password',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: Icon(_obscure2 ? Icons.visibility : Icons.visibility_off),
+                onPressed: () => setState(() => _obscure2 = !_obscure2),
               ),
-              onChanged: (_) => setState(() => _errMsg = ''),
             ),
-            const SizedBox(height: 8),
-            Obx(() => Wrap(
-                  spacing: 4,
-                  runSpacing: 4,
-                  children: _rules.map((r) {
-                    final checked = r.validate(_rxPass.value);
-                    return Chip(
-                      label: Text(r.name, style: const TextStyle(fontSize: 11)),
-                      backgroundColor:
-                          checked ? Colors.green.withOpacity(0.15) : null,
-                      avatar: Icon(
-                        checked ? Icons.check_circle : Icons.circle_outlined,
-                        size: 16,
-                        color: checked ? Colors.green : null,
-                      ),
-                    );
-                  }).toList(),
-                )),
-            if (_errMsg.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(_errMsg, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-            ],
+            onChanged: (_) => setState(() => _errMsg = ''),
+          ),
+          const SizedBox(height: 12),
+          Obx(() => Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _rules.map((r) {
+                  final checked = r.validate(_rxPass.value);
+                  return Chip(
+                    label: Text(r.name, style: const TextStyle(fontSize: 12)),
+                    backgroundColor:
+                        checked ? Colors.green.withOpacity(0.15) : null,
+                    avatar: Icon(
+                      checked ? Icons.check_circle : Icons.circle_outlined,
+                      size: 16,
+                      color: checked ? Colors.green : null,
+                    ),
+                  );
+                }).toList(),
+              )),
+          if (_errMsg.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(_errMsg, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
           ],
-        ),
+        ],
       ),
       actions: [
         ElevatedButton(
@@ -648,52 +672,49 @@ class _TwoFaStepState extends State<_TwoFaStep> {
     final ready = _codeCtrl.text.length == 6 &&
         _codeCtrl.text.codeUnits.every((c) => c >= 48 && c <= 57);
 
-    return AlertDialog(
-      title: const Text('Set up two-factor authentication (3 of 3)'),
-      content: SizedBox(
-        width: 380,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Scan this code with your authenticator app, then enter the '
-              'current 6-digit code below to confirm.',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 14),
-            if (_loading)
-              const Center(
-                  child: Padding(
-                padding: EdgeInsets.all(24),
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ))
-            else if (_qrData == null)
-              const Text('Could not generate a 2FA code. Please try again.',
-                  style: TextStyle(color: Colors.redAccent, fontSize: 12))
-            else ...[
-              Center(
-                child: SizedBox(
-                  width: 180,
-                  height: 180,
-                  child: QrImageView(
-                    backgroundColor: Colors.white,
-                    data: _qrData!,
-                    version: QrVersions.auto,
-                    size: 180,
-                    gapless: false,
-                  ),
+    return _WizardScaffold(
+      title: 'Set up two-factor authentication (3 of 3)',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Scan this code with your authenticator app, then enter the '
+            'current 6-digit code below to confirm.',
+            style: TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 20),
+          if (_loading)
+            const Center(
+                child: Padding(
+              padding: EdgeInsets.all(24),
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ))
+          else if (_qrData == null)
+            const Text('Could not generate a 2FA code. Please try again.',
+                style: TextStyle(color: Colors.redAccent, fontSize: 13))
+          else ...[
+            Center(
+              child: SizedBox(
+                width: 220,
+                height: 220,
+                child: QrImageView(
+                  backgroundColor: Colors.white,
+                  data: _qrData!,
+                  version: QrVersions.auto,
+                  size: 220,
+                  gapless: false,
                 ),
-              ).marginOnly(bottom: 8),
-              if (_secret != null)
-                Center(
-                  child: SelectableText(_secret!,
-                      style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
-                ).marginOnly(bottom: 12),
-              Row(children: [Expanded(child: codeField)]),
-            ],
+              ),
+            ).marginOnly(bottom: 10),
+            if (_secret != null)
+              Center(
+                child: SelectableText(_secret!,
+                    style: const TextStyle(fontSize: 13, fontFamily: 'monospace')),
+              ).marginOnly(bottom: 18),
+            Row(children: [Expanded(child: codeField)]),
           ],
-        ),
+        ],
       ),
       actions: [
         ElevatedButton(

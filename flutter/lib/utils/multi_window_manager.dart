@@ -18,6 +18,7 @@ enum WindowType {
   ViewCamera,
   PortForward,
   Terminal,
+  Onboarding,
   Unknown
 }
 
@@ -36,6 +37,8 @@ extension Index on int {
         return WindowType.PortForward;
       case 5:
         return WindowType.Terminal;
+      case 6:
+        return WindowType.Onboarding;
       default:
         return WindowType.Unknown;
     }
@@ -65,6 +68,7 @@ class RustDeskMultiWindowManager {
   final List<int> _viewCameraWindows = List.empty(growable: true);
   final List<int> _portForwardWindows = List.empty(growable: true);
   final List<int> _terminalWindows = List.empty(growable: true);
+  final List<int> _onboardingWindows = List.empty(growable: true);
 
   moveTabToNewWindow(int windowId, String peerId, String sessionId,
       WindowType windowType) async {
@@ -383,6 +387,33 @@ class RustDeskMultiWindowManager {
     return MultiWindowCallResult(windowId, null);
   }
 
+  // First-launch onboarding wizard (client build only). Unlike the session
+  // window types above, this has no peer/session identity and is never
+  // reused or pooled -- always a fresh window, closed by the wizard itself
+  // once done (or by the user abandoning it, in which case it's simply
+  // offered again next app launch). Not routed through newSessionWindow /
+  // _newSession, both of which are built around remote-session semantics
+  // (peer ids, DesktopTab position restore, hide-not-destroy close
+  // handling) that don't apply here.
+  Future<int> newOnboardingWindow() async {
+    final windowController =
+        await DesktopMultiWindow.createWindow(jsonEncode({
+      'type': WindowType.Onboarding.index,
+    }));
+    final windowId = windowController.windowId;
+    // No setInitBackgroundColor(Colors.black) here unlike the session
+    // windows above: that avoids a white flash before a dark remote-screen
+    // view renders, but this wizard is a plain light Material form -- black
+    // would be the wrong flash to avoid here.
+    windowController
+      ..setFrame(const Offset(0, 0) & const Size(900, 700))
+      ..center()
+      ..setTitle('Register this device');
+    registerActiveWindow(windowId);
+    _onboardingWindows.add(windowId);
+    return windowId;
+  }
+
   Future<MultiWindowCallResult> call(
       WindowType type, String methodName, dynamic args) async {
     final wnds = _findWindowsByType(type);
@@ -415,6 +446,8 @@ class RustDeskMultiWindowManager {
         return _portForwardWindows;
       case WindowType.Terminal:
         return _terminalWindows;
+      case WindowType.Onboarding:
+        return _onboardingWindows;
       case WindowType.Unknown:
         break;
     }
@@ -439,6 +472,10 @@ class RustDeskMultiWindowManager {
         break;
       case WindowType.Terminal:
         _terminalWindows.clear();
+        break;
+      case WindowType.Onboarding:
+        _onboardingWindows.clear();
+        break;
       case WindowType.Unknown:
         break;
     }
