@@ -1012,7 +1012,16 @@ impl Connection {
                             Ok(bytes) => {
                                 last_recv_time = Instant::now();
                                 conn.session_last_recv_time.as_mut().map(|t| *t.lock().unwrap() = Instant::now());
-                                conn.tfa_grace_last_recv_time.as_mut().map(|t| *t.lock().unwrap() = Instant::now());
+                                // Deliberately not touching tfa_grace_last_recv_time here (unlike
+                                // session_last_recv_time just above, a different, 30-second cache
+                                // this same pattern was copied from): the 2FA grace window is
+                                // meant to count down from the last successful 2FA verification,
+                                // not from ongoing connection activity. Refreshing it on every
+                                // packet -- including passive keepalives -- let an open idle
+                                // session hold the grace window open indefinitely. touch_tfa_grace()
+                                // still runs where it already did, on a successful 2FA code
+                                // (Auth2fa handler) and when an already-valid grace lets a new
+                                // connection back in without one (send_logon_response_and_keep_alive).
                                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
                                     if !conn.on_message(msg_in).await {
                                         break;
