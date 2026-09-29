@@ -2876,10 +2876,33 @@ pub fn main_get_common(key: String) -> String {
                 // `r0adkll/sign-android-release` appends `-signed`, and that is
                 // the name both workflows publish; without it this asked for a
                 // file that has never existed in a release.
-                return if cfg!(feature = "client") {
-                    format!("olidesk-client-{_version}-universal-signed.apk")
+                //
+                // The client flavor (client-build.yml's
+                // build-olidesk-client-android-universal) only ever publishes
+                // one universal APK -- there is no per-ABI client build to
+                // pick from.
+                if cfg!(feature = "client") {
+                    return format!("olidesk-client-{_version}-universal-signed.apk");
+                }
+                // The non-client flavor (flutter-build.yml's
+                // build-rustdesk-android matrix) publishes one APK per ABI
+                // (aarch64/armv7/x86_64) plus a universal fallback. Prefer the
+                // ABI-specific asset matching the ABI this running binary was
+                // built for -- it's the ABI Android actually loaded on this
+                // device -- and only fall back to universal for ABIs the
+                // per-ABI matrix doesn't build (there is no i686/x86 job).
+                let abi = if cfg!(target_arch = "aarch64") {
+                    Some("aarch64")
+                } else if cfg!(target_arch = "arm") {
+                    Some("armv7")
+                } else if cfg!(target_arch = "x86_64") {
+                    Some("x86_64")
                 } else {
-                    format!("olidesk-{_version}-universal-signed.apk")
+                    None
+                };
+                return match abi {
+                    Some(abi) => format!("olidesk-{_version}-{abi}-signed.apk"),
+                    None => format!("olidesk-{_version}-universal-signed.apk"),
                 };
             }
             #[cfg(not(any(

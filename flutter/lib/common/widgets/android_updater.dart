@@ -46,10 +46,36 @@ Future<void> downloadAndInstallAndroidUpdate(String releasePageUrl) async {
     final sink = file.openWrite();
     await response.stream.pipe(sink);
     await sink.close();
+
+    // An APK is a ZIP archive; a truncated download, an interrupted
+    // connection, or some unexpected non-APK response landing here with a
+    // 200 gets caught before it ever reaches the installer.
+    if (!await _looksLikeApk(file)) {
+      await file.delete().catchError((_) => file);
+      showToast('Update download failed: not a valid APK');
+      return;
+    }
     await OpenFilex.open(savePath);
   } catch (e) {
     showToast('Update download failed: $e');
   } finally {
     _androidUpdateDownloading = false;
+  }
+}
+
+/// Checks for the ZIP local-file-header signature ('PK\x03\x04') an APK
+/// starts with, since it's just a ZIP archive under a different extension.
+Future<bool> _looksLikeApk(File file) async {
+  try {
+    final raf = await file.open();
+    final header = await raf.read(4);
+    await raf.close();
+    return header.length == 4 &&
+        header[0] == 0x50 &&
+        header[1] == 0x4B &&
+        header[2] == 0x03 &&
+        header[3] == 0x04;
+  } catch (_) {
+    return false;
   }
 }
