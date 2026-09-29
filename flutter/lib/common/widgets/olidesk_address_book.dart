@@ -520,31 +520,67 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   // Build
   // ---------------------------------------------------------------------------
 
+  // Below this, a fixed 210px group panel plus the divider leaves so little
+  // width for the client list that Flutter's line breaker wraps client
+  // names one character per line -- there's no room for a permanent side
+  // panel on a phone. The group tree moves into a bottom sheet instead,
+  // opened from the toolbar's group button.
+  static const _kNarrowWidthThreshold = 500.0;
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _buildToolbar(context),
-        const Divider(height: 1),
-        Expanded(
-          child: Obx(() {
-            if (!_isConfigured) return _buildUnconfigured(context);
-            if (_needsMigration.value) return _buildMigrationPrompt(context);
-            if (_error.value.isNotEmpty) {
-              return _buildError(context);
-            }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(width: 210, child: _buildGroupPanel(context)),
-                const VerticalDivider(width: 1),
-                Expanded(child: _buildClientPanel(context)),
-              ],
-            );
-          }),
+    return LayoutBuilder(builder: (context, constraints) {
+      final narrow = constraints.maxWidth < _kNarrowWidthThreshold;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildToolbar(context, narrow: narrow),
+          const Divider(height: 1),
+          Expanded(
+            child: Obx(() {
+              if (!_isConfigured) return _buildUnconfigured(context);
+              if (_needsMigration.value) return _buildMigrationPrompt(context);
+              if (_error.value.isNotEmpty) {
+                return _buildError(context);
+              }
+              if (narrow) return _buildClientPanel(context);
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 210, child: _buildGroupPanel(context)),
+                  const VerticalDivider(width: 1),
+                  Expanded(child: _buildClientPanel(context)),
+                ],
+              );
+            }),
+          ),
+        ],
+      );
+    });
+  }
+
+  void _showGroupPickerSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SizedBox(
+        height: MediaQuery.of(ctx).size.height * 0.7,
+        child: Column(
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Theme.of(ctx).hintColor.withOpacity(0.4),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(child: _buildGroupPanel(ctx)),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -552,7 +588,7 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
   // Toolbar
   // ---------------------------------------------------------------------------
 
-  Widget _buildToolbar(BuildContext context) {
+  Widget _buildToolbar(BuildContext context, {required bool narrow}) {
     final iconColor = Theme.of(context).textTheme.bodyMedium?.color;
     return SizedBox(
       height: 36,
@@ -572,30 +608,79 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                     onTap: _load,
                     color: iconColor,
                   )),
+            if (narrow && _isConfigured) ...[
+              const SizedBox(width: 6),
+              _toolbarBtn(
+                icon: Icons.folder_outlined,
+                tooltip: 'Groups',
+                onTap: () => _showGroupPickerSheet(context),
+                color: iconColor,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Obx(() => Text(
+                      _selectedGroupId.value == null
+                          ? translate('All')
+                          : _groupNameById(_selectedGroupId.value!),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12, color: Theme.of(context).hintColor),
+                    )),
+              ),
+            ],
             const SizedBox(width: 6),
-            _toolbarTextBtn(
-              icon: Icons.create_new_folder_outlined,
-              label: 'Add Group',
-              onTap: () {
-                if (!_isConfigured) {
-                  _showSettingsDialog(context);
-                } else {
-                  _showAddGroupDialog(context);
-                }
-              },
-            ),
+            // Text labels are the toolbar's biggest space cost -- the only
+            // thing worth dropping on a narrow phone screen, since the icons
+            // alone (with tooltips) still say what each button does.
+            narrow
+                ? _toolbarBtn(
+                    icon: Icons.create_new_folder_outlined,
+                    tooltip: 'Add Group',
+                    onTap: () {
+                      if (!_isConfigured) {
+                        _showSettingsDialog(context);
+                      } else {
+                        _showAddGroupDialog(context);
+                      }
+                    },
+                    color: iconColor,
+                  )
+                : _toolbarTextBtn(
+                    icon: Icons.create_new_folder_outlined,
+                    label: 'Add Group',
+                    onTap: () {
+                      if (!_isConfigured) {
+                        _showSettingsDialog(context);
+                      } else {
+                        _showAddGroupDialog(context);
+                      }
+                    },
+                  ),
             const SizedBox(width: 4),
-            _toolbarTextBtn(
-              icon: Icons.person_add_alt_1_outlined,
-              label: 'Add Client',
-              onTap: () {
-                if (!_isConfigured) {
-                  _showSettingsDialog(context);
-                } else {
-                  _showAddClientDialog(context);
-                }
-              },
-            ),
+            narrow
+                ? _toolbarBtn(
+                    icon: Icons.person_add_alt_1_outlined,
+                    tooltip: 'Add Client',
+                    onTap: () {
+                      if (!_isConfigured) {
+                        _showSettingsDialog(context);
+                      } else {
+                        _showAddClientDialog(context);
+                      }
+                    },
+                    color: iconColor,
+                  )
+                : _toolbarTextBtn(
+                    icon: Icons.person_add_alt_1_outlined,
+                    label: 'Add Client',
+                    onTap: () {
+                      if (!_isConfigured) {
+                        _showSettingsDialog(context);
+                      } else {
+                        _showAddClientDialog(context);
+                      }
+                    },
+                  ),
             const Spacer(),
             _toolbarBtn(
               icon: Icons.settings_outlined,
@@ -982,11 +1067,14 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
                 ),
               ),
               if (client.hostname != null && client.hostname!.isNotEmpty) ...[
-                Text(
-                  '  ·  ${client.hostname}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).hintColor,
+                Flexible(
+                  child: Text(
+                    '  ·  ${client.hostname}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).hintColor,
+                    ),
                   ),
                 ),
               ],
