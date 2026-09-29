@@ -13,9 +13,31 @@ permissions:
   contents: write
 
 jobs:
+  # Reads the released version from Cargo.toml (the source of truth also
+  # bumped by version-bump commits) instead of duplicating it as a literal
+  # in this workflow, which is how flutter-build.yml's published asset
+  # filenames drifted out of sync with the actual tag.
+  resolve-version:
+    name: resolve version from Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+      - name: Read version from Cargo.toml
+        id: v
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "Resolved VERSION=$VERSION from Cargo.toml"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   run-flutter-tag-build:
+    needs: [resolve-version]
     uses: ./.github/workflows/flutter-build.yml
     secrets: inherit
     with:
       upload-artifact: true
       upload-tag: ${{ github.ref_name }}
+      upload-version: ${{ needs.resolve-version.outputs.version }}

@@ -25,10 +25,30 @@ env:
   TAG_NAME: "${{ github.ref_name }}"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  VERSION: "1.4.59"
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
 
 jobs:
+  # Reads the released version from Cargo.toml instead of a literal here,
+  # which had to be bumped by hand on every release and drifted out of sync
+  # (that's what published v1.4.58's assets stamped 1.4.57). Each job below
+  # that names an asset file sets its own job-level VERSION from this job's
+  # output instead of a workflow-level literal.
+  resolve-version:
+    name: resolve version from Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+      - name: Read version from Cargo.toml
+        id: v
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "Resolved VERSION=$VERSION from Cargo.toml"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
 
@@ -45,9 +65,11 @@ jobs:
 
   build-olidesk-client-windows:
     name: olidesk-client-windows-x86_64
-    needs: [build-RustDeskTempTopMostWindow, generate-bridge]
+    needs: [build-RustDeskTempTopMostWindow, generate-bridge, resolve-version]
     runs-on: windows-2022
     timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v7
@@ -204,9 +226,11 @@ jobs:
 
   build-olidesk-client-macos:
     name: olidesk-client-macos-${{ matrix.job.arch }}
-    needs: [generate-bridge]
+    needs: [generate-bridge, resolve-version]
     runs-on: ${{ matrix.job.os }}
     timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -513,10 +537,12 @@ jobs:
           path: ./target/${{ matrix.job.target }}/release/liblibrustdesk.so
 
   build-olidesk-client-android-universal:
-    needs: [build-olidesk-client-android]
+    needs: [build-olidesk-client-android, resolve-version]
     name: olidesk-client-android-universal
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main

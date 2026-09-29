@@ -11,7 +11,26 @@ permissions:
   contents: write
 
 jobs:
+  # See flutter-tag.yml for why this reads Cargo.toml instead of a literal.
+  resolve-version:
+    name: resolve version from Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+      - name: Read version from Cargo.toml
+        id: v
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "Resolved VERSION=$VERSION from Cargo.toml"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   run-ci:
+    needs: [resolve-version]
     uses: ./.github/workflows/flutter-build.yml
     with:
       upload-artifact: true
+      upload-version: ${{ needs.resolve-version.outputs.version }}
