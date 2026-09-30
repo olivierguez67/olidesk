@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application. config.json is deliberately not baked into the image —
 # it holds the live admin/deploy tokens and is bind-mounted at runtime by
 # docker-compose.yml instead (see config.json.example for the shape).
-COPY app.py .
+COPY app.py alerts.py .
 
 # Data volume placeholder — actual data lives on the host mount
 RUN mkdir -p /data && chown appuser:appuser /data
