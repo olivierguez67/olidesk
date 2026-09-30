@@ -113,32 +113,47 @@ Future<bool> _looksLikeApk(File file) async {
 // ---------------------------------------------------------------------------
 // Logging
 //
-// Writes to olidesk-updater.log in this app's internal documents directory
-// (getApplicationDocumentsDirectory(), e.g. /data/data/<package>/app_flutter)
-// -- unlike app-specific *external* storage (getExternalStorageDirectory()),
-// which can legitimately return null with no error on some devices/Android
-// versions and silently drop every log line, internal storage has no
-// permission model at all and is always available to the app that owns it.
-// The tradeoff is it isn't reachable from a file manager or over USB, so
-// readAndroidUpdaterLog() below exists for the in-app "Copy diagnostics"
-// button in Settings instead. Plain text, one timestamped line per event;
-// logging failures are swallowed so they never affect the update itself.
+// An in-memory buffer is the primary copy: a plain List<String>.add() cannot
+// fail the way file I/O can (getExternalStorageDirectory() returning null
+// with no exception is exactly what silently dropped every log line before
+// this), so readAndroidUpdaterLog() -- and the "Copy update diagnostics"
+// button in Settings that calls it -- reads from memory first and always has
+// something for any update check that happened in this app run.
+//
+// Best-effort persistence to olidesk-updater.log in this app's internal
+// documents directory (getApplicationDocumentsDirectory(), e.g.
+// /data/data/<package>/app_flutter -- internal storage has no permission
+// model at all, unlike app-specific *external* storage) covers the one case
+// memory can't: reading the previous run's log after the app has been killed
+// and relaunched since the failed update. It isn't reachable from a file
+// manager or over USB either way, hence the in-app viewer being the primary
+// path rather than a fallback.
 // ---------------------------------------------------------------------------
 
 const _kUpdaterLogFileName = 'olidesk-updater.log';
+const _kUpdaterLogMaxLines = 1000;
+final List<String> _updaterLogLines = [];
 File? _updaterLogFile;
 bool _updaterLogFileTried = false;
 
 Future<void> _logUpdater(String line) async {
   debugPrint('[olidesk-updater] $line');
+  final ts = DateTime.now().toIso8601String();
+  final entry = '$ts  $line';
+
+  _updaterLogLines.add(entry);
+  if (_updaterLogLines.length > _kUpdaterLogMaxLines) {
+    _updaterLogLines.removeRange(
+        0, _updaterLogLines.length - _kUpdaterLogMaxLines);
+  }
+
   final file = await _resolveUpdaterLogFile();
   if (file == null) return;
-  final ts = DateTime.now().toIso8601String();
   try {
-    await file.writeAsString('$ts  $line\n',
-        mode: FileMode.append, flush: true);
+    await file.writeAsString('$entry\n', mode: FileMode.append, flush: true);
   } catch (_) {
-    // Logging must never be the reason the update fails.
+    // Logging must never be the reason the update fails -- the in-memory
+    // copy above is what readAndroidUpdaterLog() actually depends on.
   }
 }
 
@@ -154,15 +169,22 @@ Future<File?> _resolveUpdaterLogFile() async {
   return _updaterLogFile;
 }
 
-/// Reads back the updater's own log for display/copy in Settings -- the log
-/// lives in internal storage precisely because nothing else can reach it.
+/// Reads the updater's log for display/copy in Settings: the in-memory
+/// buffer for anything that happened in this app run, falling back to the
+/// persisted file only if memory is empty (app restarted since).
 Future<String> readAndroidUpdaterLog() async {
+  if (_updaterLogLines.isNotEmpty) {
+    return _updaterLogLines.join('\n');
+  }
   final file = await _resolveUpdaterLogFile();
   if (file == null || !await file.exists()) {
     return '(no update log yet -- nothing has triggered an update check)';
   }
   try {
-    return await file.readAsString();
+    final content = await file.readAsString();
+    return content.isEmpty
+        ? '(no update log yet -- nothing has triggered an update check)'
+        : content;
   } catch (e) {
     return '(failed to read log: $e)';
   }

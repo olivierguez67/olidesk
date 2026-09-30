@@ -329,7 +329,8 @@ class MainService : Service() {
         if (intent?.action == ACT_INIT_MEDIA_PROJECTION_AND_SERVICE) {
             createForegroundNotification()
 
-            if (intent.getBooleanExtra(EXT_INIT_FROM_BOOT, false)) {
+            if (intent.getBooleanExtra(EXT_INIT_FROM_BOOT, false) ||
+                intent.getBooleanExtra(EXT_INIT_FROM_UPDATE, false)) {
                 FFI.startService()
             }
             Log.d(logTag, "service starting: ${startId}:${Thread.currentThread()}")

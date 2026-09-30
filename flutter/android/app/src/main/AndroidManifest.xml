@@ -40,6 +40,11 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <!--ACTION_BOOT_COMPLETED for debug test on no root device-->
                 <action android:name="com.olisys.olidesk.DEBUG_BOOT_COMPLETED" />
+                <!-- Fires automatically right after this app is updated (no
+                     user interaction, no permission needed for your own
+                     package); the service process was killed to let the
+                     installer replace the APK, same as a reboot kills it. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

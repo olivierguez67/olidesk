@@ -3630,8 +3630,14 @@ pub fn update_to(file: &str) -> ResultType<()> {
 //    `1` and `3` must be done in custom actions.
 //    We need also to handle the command line parsing to find the tray processes.
 pub fn update_me_msi(msi: &str, quiet: bool) -> ResultType<()> {
+    // Verbose MSI log at a fixed, predictable path -- CreateStartService's
+    // WiX condition (res/msi/Package/Components/RustDesk.wxs) is involved
+    // enough (STOP_SERVICE property, UPGRADINGPRODUCTCODE, REMOVE) that
+    // guessing whether it actually fired on a given upgrade isn't reliable
+    // without seeing it; this makes that visible on every update instead of
+    // only when someone thinks to add /l*v by hand.
     let cmds = format!(
-        "chcp 65001 && msiexec /i {msi} {}",
+        "chcp 65001 && msiexec /i {msi} /l*v \"%TEMP%\\olidesk-msi-update.log\" {}",
         if quiet { "/qn LAUNCH_TRAY_APP=N" } else { "" }
     );
     run_cmds(cmds, false, "update-msi")?;

@@ -19,7 +19,8 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Log.d(logTag, "onReceive ${intent.action}")
 
-        if (Intent.ACTION_BOOT_COMPLETED == intent.action || DEBUG_BOOT_COMPLETED == intent.action) {
+        val isUpdate = Intent.ACTION_MY_PACKAGE_REPLACED == intent.action
+        if (Intent.ACTION_BOOT_COMPLETED == intent.action || DEBUG_BOOT_COMPLETED == intent.action || isUpdate) {
             // check SharedPreferences config
             val prefs = context.getSharedPreferences(KEY_SHARED_PREFERENCES, FlutterActivity.MODE_PRIVATE)
             if (!prefs.getBoolean(KEY_START_ON_BOOT_OPT, false)) {
@@ -34,7 +35,11 @@ class BootReceiver : BroadcastReceiver() {
 
             val it = Intent(context, MainService::class.java).apply {
                 action = ACT_INIT_MEDIA_PROJECTION_AND_SERVICE
-                putExtra(EXT_INIT_FROM_BOOT, true)
+                if (isUpdate) {
+                    putExtra(EXT_INIT_FROM_UPDATE, true)
+                } else {
+                    putExtra(EXT_INIT_FROM_BOOT, true)
+                }
             }
             Toast.makeText(context, "RustDesk is Open", Toast.LENGTH_LONG).show()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
