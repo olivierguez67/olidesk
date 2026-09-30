@@ -113,15 +113,16 @@ Future<bool> _looksLikeApk(File file) async {
 // ---------------------------------------------------------------------------
 // Logging
 //
-// Writes to olidesk-updater.log in this app's app-specific external storage
-// directory (e.g. /storage/emulated/0/Android/data/<package>/files) --
-// requires no extra permission on any supported Android version, and is
-// readable from a PC over USB (file transfer / MTP shows per-app
-// Android/data folders even where the on-device Files app hides them) or
-// from a file manager with "show hidden/system folders" enabled. Mirrors the
-// desktop olidesk-deploy.log convention in olidesk_deploy.dart: plain text,
-// one timestamped line per event, logging failures are swallowed so they
-// never affect the update itself.
+// Writes to olidesk-updater.log in this app's internal documents directory
+// (getApplicationDocumentsDirectory(), e.g. /data/data/<package>/app_flutter)
+// -- unlike app-specific *external* storage (getExternalStorageDirectory()),
+// which can legitimately return null with no error on some devices/Android
+// versions and silently drop every log line, internal storage has no
+// permission model at all and is always available to the app that owns it.
+// The tradeoff is it isn't reachable from a file manager or over USB, so
+// readAndroidUpdaterLog() below exists for the in-app "Copy diagnostics"
+// button in Settings instead. Plain text, one timestamped line per event;
+// logging failures are swallowed so they never affect the update itself.
 // ---------------------------------------------------------------------------
 
 const _kUpdaterLogFileName = 'olidesk-updater.log';
@@ -145,14 +146,24 @@ Future<File?> _resolveUpdaterLogFile() async {
   if (_updaterLogFileTried) return _updaterLogFile;
   _updaterLogFileTried = true;
   try {
-    final dir = await getExternalStorageDirectory();
-    if (dir == null) {
-      _updaterLogFile = null;
-      return null;
-    }
+    final dir = await getApplicationDocumentsDirectory();
     _updaterLogFile = File('${dir.path}/$_kUpdaterLogFileName');
   } catch (_) {
     _updaterLogFile = null;
   }
   return _updaterLogFile;
+}
+
+/// Reads back the updater's own log for display/copy in Settings -- the log
+/// lives in internal storage precisely because nothing else can reach it.
+Future<String> readAndroidUpdaterLog() async {
+  final file = await _resolveUpdaterLogFile();
+  if (file == null || !await file.exists()) {
+    return '(no update log yet -- nothing has triggered an update check)';
+  }
+  try {
+    return await file.readAsString();
+  } catch (e) {
+    return '(failed to read log: $e)';
+  }
 }

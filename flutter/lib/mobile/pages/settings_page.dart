@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter_hbb/common/widgets/android_updater.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:get/get.dart';
@@ -603,6 +605,20 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
           onToggle: (bool toValue) async {
             await mainSetLocalBoolOption(kOptionEnableCheckUpdate, toValue);
             setState(() => _checkUpdateOnStartup = toValue);
+          },
+        ),
+      );
+    }
+
+    if (isAndroid) {
+      enhancementsTiles.add(
+        SettingsTile(
+          title: Text('Copy update diagnostics'),
+          leading: Icon(Icons.bug_report_outlined),
+          onPressed: (context) async {
+            final log = await readAndroidUpdaterLog();
+            await Clipboard.setData(ClipboardData(text: log));
+            showToast('Diagnostics copied to clipboard');
           },
         ),
       );
