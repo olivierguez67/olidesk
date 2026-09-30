@@ -10,6 +10,8 @@ from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, jsonify, g
 
+import alerts
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -188,14 +190,17 @@ def _client_ip() -> str:
     return request.remote_addr or ""
 
 
-def _log_admin_auth(success: bool, device_name, endpoint: str):
+def _log_admin_auth(db, success: bool, device_name, endpoint: str):
+    ip = _client_ip()
     admin_auth_log.info(
         "%s ip=%s device=%s endpoint=%s",
         "SUCCESS" if success else "FAILURE",
-        _client_ip(),
+        ip,
         device_name or "-",
         endpoint,
     )
+    if not success:
+        alerts.check_admin_auth_failure(db, ip)
 
 
 def _touch_device(db, device_row):
@@ -233,10 +238,10 @@ def require_ab_auth(f):
                 (_hash_token(token),),
             ).fetchone()
         if not device:
-            _log_admin_auth(False, None, request.path)
+            _log_admin_auth(db, False, None, request.path)
             return jsonify({"error": "Unauthorized"}), 401
         _touch_device(db, device)
-        _log_admin_auth(True, device["name"], request.path)
+        _log_admin_auth(db, True, device["name"], request.path)
         g.admin_device = device
         return f(*args, **kwargs)
     return decorated
@@ -248,12 +253,12 @@ def require_admin_devices_auth(f):
     a fresh server, and to recover if every device token is lost."""
     @wraps(f)
     def decorated(*args, **kwargs):
+        db = get_db()
         token = _bearer_token()
         if token and TOKEN and token == TOKEN:
-            _log_admin_auth(True, "break-glass", request.path)
+            _log_admin_auth(db, True, "break-glass", request.path)
             g.admin_device = None
             return f(*args, **kwargs)
-        db = get_db()
         device = None
         if token:
             device = db.execute(
@@ -261,10 +266,10 @@ def require_admin_devices_auth(f):
                 (_hash_token(token),),
             ).fetchone()
         if not device:
-            _log_admin_auth(False, None, request.path)
+            _log_admin_auth(db, False, None, request.path)
             return jsonify({"error": "Unauthorized"}), 401
         _touch_device(db, device)
-        _log_admin_auth(True, device["name"], request.path)
+        _log_admin_auth(db, True, device["name"], request.path)
         g.admin_device = device
         return f(*args, **kwargs)
     return decorated
@@ -305,6 +310,7 @@ def require_enroll_auth(f):
             (code, now),
         ).fetchone()
         if not row:
+            alerts.check_enrollment_failure(db, _client_ip())
             return jsonify({"error": "Unauthorized"}), 401
         g.enrollment_code = row
         return f(*args, **kwargs)
@@ -698,6 +704,10 @@ def register_client():
         (now, code_row["id"]),
     )
     db.commit()
+    if status == 201:
+        # Only a genuine first-time registration, not every re-registration
+        # of an already-known client -- see alert_new_device's docstring.
+        alerts.alert_new_device(db, olidesk_id, hostname, group_name, _client_ip())
     log.info(
         "client registered: ip=%s hostname=%s group=%s olidesk_id=%s",
         _client_ip(), hostname, group_name, olidesk_id,
@@ -860,6 +870,32 @@ def delete_admin_device(device_id):
         _client_ip(), row["name"], _current_actor_name(),
     )
     return jsonify({"deleted": device_id})
+
+
+# ---------------------------------------------------------------------------
+# Alerts
+# ---------------------------------------------------------------------------
+
+@app.route("/api/admin/alerts/test", methods=["POST"])
+@require_admin_devices_auth
+def test_alert():
+    """Sends one Telegram message through the exact same code path as a
+    real alert, so verifying the setup doesn't depend on actually
+    triggering one of the real conditions. Does not go through
+    alerts._should_send -- a deliberate test send should never be
+    suppressed by the cooldown that's protecting against a real incident.
+    See ROLLBACK.md-adjacent ops docs / the server setup notes for how to
+    call this."""
+    if not alerts.alerts_enabled():
+        return jsonify({"error": "Alerting is not configured (alerts.json missing "
+                                  "bot_token/chat_id)"}), 400
+    ok = alerts.send_telegram_message(
+        f"✅ Olidesk: test alert from {_current_actor_name()} at "
+        f"{datetime.now(timezone.utc).isoformat()}"
+    )
+    if not ok:
+        return jsonify({"error": "Telegram send failed -- check the container logs"}), 502
+    return jsonify({"sent": True})
 
 
 # ---------------------------------------------------------------------------

@@ -68,5 +68,7 @@ olidesk-release.jks.b64
 .claude/
 # live server config, holds the admin and deploy tokens — see config.json.example
 olidesk-api/config.json
+# live Telegram bot token and chat id — see alerts.json.example
+olidesk-api/alerts.json
 # live address-book data (client names/hostnames/ids), bind-mounted by docker-compose.yml
 olidesk-api/data/

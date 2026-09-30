@@ -15,6 +15,15 @@ services:
       # Gitignored (holds live tokens) — copy config.json.example to
       # config.json here and fill it in before first run.
       - ./config.json:/app/config.json:ro
+      # Gitignored, optional — copy alerts.json.example to alerts.json here
+      # and fill in a Telegram bot token + chat id to enable alerting; if
+      # this file doesn't exist on the host BEFORE the container is
+      # (re)started, Docker creates an empty directory at the mount target
+      # instead of failing, which alerts.py's own load code treats the same
+      # as "missing" (alerting disabled, logged once) — but that directory
+      # then has to be removed by hand before the real file can go there,
+      # so create the file first, not after.
+      - ./alerts.json:/app/alerts.json:ro
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8443/health')"]
