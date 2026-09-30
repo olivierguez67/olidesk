@@ -10,8 +10,6 @@ from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, jsonify, g
 
-import alerts
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -46,6 +44,12 @@ _ENROLL_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+# Imported after logging.basicConfig() specifically -- alerts.py logs
+# whether it found a usable bot_token/chat_id at import time, and that log
+# call needs a configured root handler to actually be visible instead of
+# silently going nowhere (caught this exact gap on the first deploy).
+import alerts
 
 # Dedicated, append-only file for every admin auth attempt (success and
 # failure) — separate from the app's own stdout logging so it's easy to
