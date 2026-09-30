@@ -65,9 +65,18 @@ Future<void> downloadAndInstallAndroidUpdate(String releasePageUrl) async {
     await _logUpdater('wrote $bytesWritten bytes to $savePath (file size on '
         'disk: $fileSize)');
     if (contentLength != null && bytesWritten != contentLength) {
+      // This was logged as a warning only, then handed to the installer
+      // anyway -- a truncated download still starts with a valid ZIP
+      // header (the local file header is at the front, truncation cuts the
+      // end), so it passes the magic-byte check below and Android's
+      // installer is left to reject the incomplete result with "package
+      // appears to be invalid" instead of this app catching it.
+      await file.delete().catchError((_) => file);
       await _logUpdater(
-          'WARNING: bytes written ($bytesWritten) != Content-Length ($contentLength) '
-          '-- download likely truncated');
+          'aborting: bytes written ($bytesWritten) != Content-Length '
+          '($contentLength), download truncated, file deleted');
+      showToast('Update download failed: incomplete download');
+      return;
     }
 
     // An APK is a ZIP archive; a truncated download, an interrupted
