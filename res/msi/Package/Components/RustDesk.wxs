@@ -98,14 +98,34 @@
 
 		<InstallExecuteSequence>
 
-			<Custom Action="SetPropertyIsServiceRunning" After="InstallInitialize" Condition="Installed" />
-			<Custom Action="SetPropertyIsServiceRunning.SetParam.AppName" Before="SetPropertyIsServiceRunning" Condition="Installed" />
-			<Custom Action="SetPropertyIsServiceRunning.SetParam.PropertyName" Before="SetPropertyIsServiceRunning" Condition="Installed" />
-
-			<Custom Action="SetPropertyServiceStop" After="InstallInitialize" Condition="NOT Installed" />
-			<Custom Action="SetPropertyServiceStop.SetParam.ConfigFile" Before="SetPropertyServiceStop" Condition="NOT Installed" />
-			<Custom Action="SetPropertyServiceStop.SetParam.ConfigKey" Before="SetPropertyServiceStop" Condition="NOT Installed" />
-			<Custom Action="SetPropertyServiceStop.SetParam.PropertyName" Before="SetPropertyServiceStop" Condition="NOT Installed" />
+			<!-- STOP_SERVICE used to come from two different sources depending on
+			     Installed: a fresh install read the persisted stop-service config
+			     key (SetPropertyServiceStop, below), but an upgrade instead asked
+			     "is the service process running right now, at this exact instant
+			     of InstallInitialize" (SetPropertyIsServiceRunning), a live
+			     snapshot taken moments before RemoveExistingProducts and
+			     TryStopDeleteService stop that same service to replace its
+			     binary. If the service happened to already be stopped for any
+			     reason at that instant (a prior failed restart that nobody
+			     noticed, a crash, anything), this read STOP_SERVICE='Y' and
+			     CreateStartService below never ran; found via a confirmed
+			     report that after every MSI upgrade the service stayed stopped
+			     and needed a manual "Start service" click, every single time.
+			     stop-service is also exactly the config key the app's own tray
+			     Start/Stop service toggle writes (see start_service() in
+			     flutter/lib/common.dart): it already is the cross-platform
+			     "should this run" signal, correctly defaults to not-stopped
+			     when absent (ReadConfig.cpp returns an empty string for a
+			     missing key, and an empty string is not 'Y'), and isn't a
+			     live-timing snapshot. Now the single source for both install
+			     and upgrade; SetPropertyIsServiceRunning (CustomActions.cpp)
+			     is unused as of this change, left defined in CustomActions.wxs
+			     in case a different live-state use turns up later, just no
+			     longer scheduled here. -->
+			<Custom Action="SetPropertyServiceStop" After="InstallInitialize" />
+			<Custom Action="SetPropertyServiceStop.SetParam.ConfigFile" Before="SetPropertyServiceStop" />
+			<Custom Action="SetPropertyServiceStop.SetParam.ConfigKey" Before="SetPropertyServiceStop" />
+			<Custom Action="SetPropertyServiceStop.SetParam.PropertyName" Before="SetPropertyServiceStop" />
 
 			<!-- Do not call CreateStartService if is uninstalling. -->
 			<!-- (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE) means uninstalling. -->

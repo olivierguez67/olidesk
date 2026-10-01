@@ -4023,15 +4023,20 @@ void checkUpdate() {
     Timer(const Duration(seconds: 1), () async {
       bind.mainGetSoftwareUpdateUrl();
     });
-    // Desktop already re-checks every 24h in the background
-    // (`src/updater.rs::start_auto_update_check_`), which only ever runs on
-    // Windows. Mobile has no background process, so re-check periodically
-    // while the app is open.
-    if (isAndroid) {
-      Timer.periodic(const Duration(hours: 24), (_) {
-        bind.mainGetSoftwareUpdateUrl();
-      });
-    }
+    // `src/updater.rs::start_auto_update_check_` re-checks every 24h, but
+    // only inside the Windows *service* process (gated on is_server() in
+    // rendezvous_mediator.rs) -- not this GUI process, and not reliably
+    // running at all, since that service is the exact thing bugs in the
+    // update/service-restart path have left stopped. Even when it is
+    // running, it's a separate OS process from this one; there's no
+    // established path for it to push a push_global_event into this
+    // process's Flutter engine, only its own. So this GUI process re-checks
+    // for itself instead of depending on that, on every platform, not just
+    // Android -- a stale-for-hours update banner was reported specifically
+    // on Windows, running this whole time but never re-checking.
+    Timer.periodic(const Duration(hours: 4), (_) {
+      bind.mainGetSoftwareUpdateUrl();
+    });
   }
 }
 

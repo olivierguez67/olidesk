@@ -65,10 +65,20 @@ fn make_tray() -> hbb_common::ResultType<()> {
         None
     };
     let open_i = MenuItem::new(translate("Open".to_owned()), true, None);
+    // Distinct from "Stop service": that one calls uninstall_service below,
+    // which runs `sc stop` + `sc delete` -- it fully deregisters the
+    // Windows service, not just closes this tray process. Before this,
+    // "Stop service" was the only menu entry that closed anything at all,
+    // so it was the de facto "exit" for anyone just wanting to close the
+    // tray icon -- deleting the service every time they did, which is
+    // likely why it kept needing a manual restart. Exit here only ends
+    // this tray process's own event loop; the background service (a
+    // separate OS process) is untouched.
+    let exit_i = MenuItem::new(translate("Exit".to_owned()), true, None);
     if let Some(quit_i) = &quit_i {
-        tray_menu.append_items(&[&open_i, quit_i]).ok();
+        tray_menu.append_items(&[&open_i, quit_i, &exit_i]).ok();
     } else {
-        tray_menu.append_items(&[&open_i]).ok();
+        tray_menu.append_items(&[&open_i, &exit_i]).ok();
     }
     let tooltip = |count: usize| {
         if count == 0 {
@@ -168,7 +178,9 @@ fn make_tray() -> hbb_common::ResultType<()> {
         }
 
         if let Ok(event) = menu_channel.try_recv() {
-            if let Some(quit_i) = &quit_i {
+            if event.id == exit_i.id() {
+                *control_flow = ControlFlow::Exit;
+            } else if let Some(quit_i) = &quit_i {
                 if event.id == quit_i.id() {
                     /* failed in windows, seems no permission to check system process
                     if !crate::check_process("--server", false) {
