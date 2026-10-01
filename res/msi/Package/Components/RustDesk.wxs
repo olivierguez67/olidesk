@@ -135,7 +135,18 @@
 			<Custom Action="SetPropertyIsServiceRunning.SetParam.AppName" Before="SetPropertyIsServiceRunning" Condition="Installed" />
 			<Custom Action="SetPropertyIsServiceRunning.SetParam.PropertyName" Before="SetPropertyIsServiceRunning" Condition="Installed" />
 
-			<Custom Action="SetPropertyServiceStop" After="InstallInitialize" />
+			<!-- After="SetPropertyIsServiceRunning", not just After="InstallInitialize":
+			     a real upgrade log showed STOP_SERVICE ending up 'Y' (single-quoted),
+			     which matches the XML default and SetPropertyIsServiceRunning's own
+			     hardcoded literal exactly, not what SetPropertyServiceStop would
+			     produce (ReadConfig.cpp does no quote-stripping, so a real config
+			     value comes back double-quoted, e.g. "Y"). Both actions were only
+			     anchored off the same InstallInitialize point with no ordering
+			     constraint *between* them; WiX's linker never promised the
+			     later-declared one of two same-anchor siblings runs second, that
+			     was an assumption, and the log proved it wrong. This makes the
+			     ordering an explicit, linker-enforced fact instead. -->
+			<Custom Action="SetPropertyServiceStop" After="SetPropertyIsServiceRunning" />
 			<Custom Action="SetPropertyServiceStop.SetParam.ConfigFile" Before="SetPropertyServiceStop" />
 			<Custom Action="SetPropertyServiceStop.SetParam.ConfigKey" Before="SetPropertyServiceStop" />
 			<Custom Action="SetPropertyServiceStop.SetParam.PropertyName" Before="SetPropertyServiceStop" />
