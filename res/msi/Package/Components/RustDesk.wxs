@@ -117,11 +117,24 @@
 			     "should this run" signal, correctly defaults to not-stopped
 			     when absent (ReadConfig.cpp returns an empty string for a
 			     missing key, and an empty string is not 'Y'), and isn't a
-			     live-timing snapshot. Now the single source for both install
-			     and upgrade; SetPropertyIsServiceRunning (CustomActions.cpp)
-			     is unused as of this change, left defined in CustomActions.wxs
-			     in case a different live-state use turns up later, just no
-			     longer scheduled here. -->
+			     live-timing snapshot.
+
+			     SetPropertyIsServiceRunning is still scheduled below, unchanged
+			     (TryDeleteStartupShortcut.SetParam's own scheduling further down
+			     still anchors off it via Before="SetPropertyIsServiceRunning",
+			     and WiX's linker resolves that by name regardless of which of
+			     these two actions "wins" STOP_SERVICE; removing its scheduling
+			     entirely, tried first, broke the build: "The identifier
+			     'WixAction:InstallExecuteSequence/SetPropertyIsServiceRunning'
+			     could not be found"). SetPropertyServiceStop is scheduled after
+			     it below, same relative order as the original file, so its
+			     config-based value is simply the one still in STOP_SERVICE by
+			     the time CreateStartService reads it; SetPropertyIsServiceRunning
+			     still runs every time, its own result just no longer matters. -->
+			<Custom Action="SetPropertyIsServiceRunning" After="InstallInitialize" Condition="Installed" />
+			<Custom Action="SetPropertyIsServiceRunning.SetParam.AppName" Before="SetPropertyIsServiceRunning" Condition="Installed" />
+			<Custom Action="SetPropertyIsServiceRunning.SetParam.PropertyName" Before="SetPropertyIsServiceRunning" Condition="Installed" />
+
 			<Custom Action="SetPropertyServiceStop" After="InstallInitialize" />
 			<Custom Action="SetPropertyServiceStop.SetParam.ConfigFile" Before="SetPropertyServiceStop" />
 			<Custom Action="SetPropertyServiceStop.SetParam.ConfigKey" Before="SetPropertyServiceStop" />
