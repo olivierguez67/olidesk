@@ -686,6 +686,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Auto update", ""),
         ("update-failed-check-msi-tip", ""),
         ("websocket_tip", ""),
+        ("always_relay_tip", ""),
+        ("app_lock_tip", ""),
         ("Use WebSocket", ""),
         ("Trackpad speed", ""),
         ("Default trackpad speed", ""),

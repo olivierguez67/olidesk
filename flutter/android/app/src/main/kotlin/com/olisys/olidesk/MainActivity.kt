@@ -29,13 +29,20 @@ import androidx.annotation.RequiresApi
 import org.json.JSONArray
 import org.json.JSONObject
 import com.hjq.permissions.XXPermissions
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import kotlin.concurrent.thread
 
 
-class MainActivity : FlutterActivity() {
+// FlutterFragmentActivity instead of FlutterActivity specifically for
+// local_auth (app-lock / biometric or device-PIN prompt): its Android
+// implementation requires a FragmentActivity to host BiometricPrompt's
+// dialog fragment, documented by the plugin itself. FlutterFragmentActivity
+// is Flutter's own drop-in replacement for exactly this case, not a
+// workaround -- it extends FlutterActivity's behavior rather than replacing
+// it.
+class MainActivity : FlutterFragmentActivity() {
     companion object {
         var flutterMethodChannel: MethodChannel? = null
         private var _rdClipboardManager: RdClipboardManager? = null
@@ -49,6 +56,38 @@ class MainActivity : FlutterActivity() {
 
     private var isAudioStart = false
     private val audioRecordHandle = AudioRecordHandle(this, { false }, { isAudioStart })
+
+    // Held only while a connection is actively waiting on the user (e.g. the
+    // 2FA prompt) -- a PARTIAL_WAKE_LOCK, not WakelockPlus's screen-on flag,
+    // specifically because this needs to survive the app being backgrounded
+    // (switching to an authenticator app to copy a code), not just the
+    // screen staying on while Olidesk itself is in the foreground. Without
+    // it, Android's normal background network/CPU throttling can interrupt
+    // the in-progress connection while the user is away for even a few
+    // seconds, which looked like the connection restarting from scratch.
+    // Acquired/released from Dart around exactly that window -- see
+    // AppLock-adjacent connecting-wakelock calls in enter2FaDialog.
+    private var connectingWakeLock: android.os.PowerManager.WakeLock? = null
+
+    private fun setConnectingWakelock(acquire: Boolean) {
+        if (acquire) {
+            if (connectingWakeLock?.isHeld == true) return
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            val wl = pm.newWakeLock(
+                android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                "olidesk:connecting"
+            )
+            wl.setReferenceCounted(false)
+            // Hard ceiling so a bug here (forgetting to release) can't drain
+            // the battery indefinitely -- a real 2FA entry takes seconds,
+            // not minutes.
+            wl.acquire(5 * 60 * 1000L)
+            connectingWakeLock = wl
+        } else {
+            connectingWakeLock?.let { if (it.isHeld) it.release() }
+            connectingWakeLock = null
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -272,6 +311,10 @@ class MainActivity : FlutterActivity() {
                 }
                 "on_voice_call_closed" -> {
                     onVoiceCallClosed()
+                }
+                "set_connecting_wakelock" -> {
+                    setConnectingWakelock(call.arguments as? Boolean ?: false)
+                    result.success(true)
                 }
                 else -> {
                     result.error("-1", "No such method", null)

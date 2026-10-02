@@ -2271,14 +2271,29 @@ void enter2FaDialog(
   final RxBool submitReady = false.obs;
   final RxBool trustThisDevice = false.obs;
 
+  // Android only, no-ops elsewhere (see FFI.invokeMethod): a real
+  // PowerManager PARTIAL_WAKE_LOCK, held only for as long as this exact
+  // dialog is open. Switching to an authenticator app to copy the code is
+  // the whole point of this dialog existing, and without this, Android's
+  // normal background network/CPU throttling could interrupt the
+  // in-progress connection during that exact window -- looked like the
+  // connection restarting from scratch upon returning. Released on both
+  // exits below (submit and cancel), not just one.
+  gFFI.invokeMethod('set_connecting_wakelock', true);
+  void releaseConnectingWakelock() {
+    gFFI.invokeMethod('set_connecting_wakelock', false);
+  }
+
   dialogManager.dismissAll();
   dialogManager.show((setState, close, context) {
     cancel() {
+      releaseConnectingWakelock();
       close();
       closeConnection();
     }
 
     submit() {
+      releaseConnectingWakelock();
       gFFI.send2FA(sessionId, controller.text.trim(), trustThisDevice.value);
       close();
       dialogManager.showLoading(translate('Logging in...'),

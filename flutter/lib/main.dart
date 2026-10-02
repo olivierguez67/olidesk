@@ -25,6 +25,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'common.dart';
 import 'common/olidesk_deploy.dart';
+import 'common/widgets/app_lock.dart';
 import 'common/widgets/olidesk_register_device.dart';
 import 'consts.dart';
 import 'mobile/pages/home_page.dart';
@@ -504,6 +505,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
     };
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateOrientation());
+    AppLock.init();
   }
 
   @override
@@ -515,6 +517,11 @@ class _AppState extends State<App> with WidgetsBindingObserver {
   @override
   void didChangeMetrics() {
     _updateOrientation();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    AppLock.onLifecycleChanged(state);
   }
 
   void _updateOrientation() {
@@ -556,11 +563,17 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           theme: MyTheme.lightTheme,
           darkTheme: MyTheme.darkTheme,
           themeMode: MyTheme.currentThemeMode(),
-          home: isDesktop
-              ? const DesktopTabPage()
-              : isWeb
-                  ? WebHomePage()
-                  : HomePage(),
+          // AppLock only ever starts "locked" (unlocked.value == false) on
+          // mobile with the setting on -- see AppLock.init(). Checked here,
+          // above the platform split below, so a locked app shows the lock
+          // screen regardless of which home page it would otherwise be.
+          home: Obx(() => !AppLock.unlocked.value
+              ? const AppLockScreen()
+              : isDesktop
+                  ? const DesktopTabPage()
+                  : isWeb
+                      ? WebHomePage()
+                      : HomePage()),
           localizationsDelegates: const [
             GlobalMaterialLocalizations.delegate,
             GlobalWidgetsLocalizations.delegate,

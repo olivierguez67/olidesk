@@ -259,6 +259,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("download-new-version-failed-tip", "Download failed. You can try again or click the \"Download\" button to download from the release page and upgrade manually."),
         ("update-failed-check-msi-tip", "Installation method check failed. Please click the \"Download\" button to download from the release page and upgrade manually."),
         ("websocket_tip", "When using WebSocket, only relay connections are supported."),
+        ("always_relay_tip", "Skip the direct connection attempt and always connect through the relay server. Useful when your devices are behind NAT and direct connections rarely succeed."),
+        ("app_lock_tip", "Use your fingerprint, face, or device PIN/pattern to unlock Olidesk. If your phone is lost or stolen, this keeps your client list and saved credentials from being opened along with it."),
         ("terminal-admin-login-tip", "Please input the administrator username and password of the controlled side."),
         ("elevation_username_tip", "Input username or domain\\username"),
         ("allow-insecure-tls-fallback-tip", "By default, Olidesk verifies the server certificate for protocols using TLS.\nWith this option enabled, Olidesk will fall back to skipping the verification step and proceed in case of verification failure."),

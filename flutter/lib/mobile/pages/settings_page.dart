@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_hbb/common/widgets/android_updater.dart';
+import 'package:flutter_hbb/common/widgets/app_lock.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:get/get.dart';
@@ -73,6 +74,8 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   var _ignoreBatteryOpt = false;
   var _enableStartOnBoot = false;
   var _checkUpdateOnStartup = false;
+  var _forceAlwaysRelay = false;
+  var _enableAppLock = false;
   var _showTerminalExtraKeys = false;
   var _floatingWindowDisabled = false;
   var _keepScreenOn = KeepScreenOn.duringControlled; // relay on floating window
@@ -187,6 +190,18 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       if (checkUpdateOnStartup != _checkUpdateOnStartup) {
         update = true;
         _checkUpdateOnStartup = checkUpdateOnStartup;
+      }
+
+      var forceAlwaysRelay = mainGetBoolOptionSync(kOptionForceAlwaysRelay);
+      if (forceAlwaysRelay != _forceAlwaysRelay) {
+        update = true;
+        _forceAlwaysRelay = forceAlwaysRelay;
+      }
+
+      var enableAppLock = mainGetLocalBoolOptionSync(kOptionEnableAppLock);
+      if (enableAppLock != _enableAppLock) {
+        update = true;
+        _enableAppLock = enableAppLock;
       }
 
       var floatingWindowDisabled =
@@ -608,6 +623,64 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
           },
         ),
       );
+    }
+
+    {
+      enhancementsTiles.add(
+        SettingsTile.switchTile(
+          initialValue: _forceAlwaysRelay,
+          title:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(translate('Always connect via relay')),
+            Text(
+                '* ${translate('always_relay_tip')}',
+                style: Theme.of(context).textTheme.bodySmall),
+          ]),
+          onToggle: (bool toValue) async {
+            await mainSetBoolOption(kOptionForceAlwaysRelay, toValue);
+            setState(() => _forceAlwaysRelay = toValue);
+          },
+        ),
+      );
+    }
+
+    {
+      enhancementsTiles.add(
+        SettingsTile.switchTile(
+          initialValue: _enableAppLock,
+          title:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(translate('Require biometric/PIN to open Olidesk')),
+            Text('* ${translate('app_lock_tip')}',
+                style: Theme.of(context).textTheme.bodySmall),
+          ]),
+          onToggle: (bool toValue) async {
+            await AppLock.setEnabled(toValue);
+            setState(() => _enableAppLock = toValue);
+          },
+        ),
+      );
+      if (_enableAppLock) {
+        enhancementsTiles.add(_getPopupDialogRadioEntry(
+          title: 'Re-lock after',
+          list: [
+            _RadioEntry('Immediately', '0'),
+            _RadioEntry('1 minute', '1'),
+            _RadioEntry('5 minutes', '5'),
+            _RadioEntry('15 minutes', '15'),
+            _RadioEntry('30 minutes', '30'),
+          ],
+          getter: () => bind
+              .mainGetLocalOption(key: kOptionAppLockTimeoutMinutes)
+              .isEmpty
+              ? kDefaultAppLockTimeoutMinutes.toString()
+              : bind.mainGetLocalOption(key: kOptionAppLockTimeoutMinutes),
+          asyncSetter: (value) async {
+            await bind.mainSetLocalOption(
+                key: kOptionAppLockTimeoutMinutes, value: value);
+          },
+        ));
+      }
     }
 
     if (isAndroid) {

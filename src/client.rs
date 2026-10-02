@@ -1852,6 +1852,17 @@ impl LoginConfigHandler {
         self.restarting_remote_device = false;
         self.force_relay =
             config::option2bool("force-always-relay", &self.get_option("force-always-relay"))
+                // Per-peer "force-always-relay" (above) is unset for most peers --
+                // nothing in this codebase exposed a UI to set it before this.
+                // This global default (Settings > Network > "Always connect via
+                // relay") is what most NAT'd-fleet users actually want: skip the
+                // ~1 minute direct-then-fallback-to-relay wait on every single
+                // connection, without configuring each peer individually. Uses
+                // the same Config store (not LocalConfig) as every other
+                // Network-section toggle in this app (allow-websocket,
+                // allow-insecure-tls-fallback, ...), so it's consistent with
+                // them for sync/admin-lock purposes.
+                || config::option2bool("force-always-relay", &Config::get_option("force-always-relay"))
                 || force_relay
                 || use_ws()
                 || Config::is_proxy();
