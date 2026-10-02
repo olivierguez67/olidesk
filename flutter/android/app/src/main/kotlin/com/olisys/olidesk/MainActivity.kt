@@ -71,7 +71,10 @@ class MainActivity : FlutterFragmentActivity() {
 
     private fun setConnectingWakelock(acquire: Boolean) {
         if (acquire) {
-            if (connectingWakeLock?.isHeld == true) return
+            if (connectingWakeLock?.isHeld == true) {
+                logLifecycle("wakelock", "acquire requested, already held")
+                return
+            }
             val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
             val wl = pm.newWakeLock(
                 android.os.PowerManager.PARTIAL_WAKE_LOCK,
@@ -83,9 +86,30 @@ class MainActivity : FlutterFragmentActivity() {
             // not minutes.
             wl.acquire(5 * 60 * 1000L)
             connectingWakeLock = wl
+            logLifecycle("wakelock", "acquired")
         } else {
             connectingWakeLock?.let { if (it.isHeld) it.release() }
             connectingWakeLock = null
+            logLifecycle("wakelock", "released")
+        }
+    }
+
+    // Forwarded to Dart's diagnostic log (see androidChannelInit's
+    // "lifecycle_log" case) so the Activity lifecycle, which Dart can't
+    // observe directly, shows up in the same in-app, copyable trail as the
+    // Dart-side events -- specifically for the "does the Activity/process
+    // get killed while the app is backgrounded" question. Swallows failures:
+    // if the engine is already torn down (e.g. called from onDestroy after
+    // things have gone sideways), that failure is itself not worth crashing
+    // over.
+    private fun logLifecycle(event: String, detail: String = "") {
+        try {
+            flutterMethodChannel?.invokeMethod(
+                "lifecycle_log",
+                mapOf("event" to event, "detail" to detail)
+            )
+        } catch (e: Exception) {
+            Log.e(logTag, "logLifecycle failed: ${e.message}")
         }
     }
 
@@ -112,6 +136,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        logLifecycle("onResume")
         val inputPer = InputService.isOpen
         runOnUiThread {
             flutterMethodChannel?.invokeMethod(
@@ -119,6 +144,11 @@ class MainActivity : FlutterFragmentActivity() {
                 mapOf("name" to "input", "value" to inputPer.toString())
             )
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        logLifecycle("onPause")
     }
 
     private fun requestMediaProjection() {
@@ -137,6 +167,11 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // savedInstanceState != null on a fresh onCreate is the signature of
+        // Android recreating this Activity after its process was killed --
+        // as distinct from a normal pause/resume, which never calls onCreate
+        // again at all.
+        logLifecycle("onCreate", "savedInstanceState=${savedInstanceState != null}")
         if (_rdClipboardManager == null) {
             _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
             FFI.setClipboardManager(_rdClipboardManager!!)
@@ -145,6 +180,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onDestroy() {
         Log.e(logTag, "onDestroy")
+        logLifecycle("onDestroy")
         mainService?.let {
             unbindService(serviceConnection)
         }
@@ -444,6 +480,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onStop() {
         super.onStop()
+        logLifecycle("onStop")
         val disableFloatingWindow = FFI.getLocalOption("disable-floating-window") == "Y"
         if (!disableFloatingWindow && MainService.isReady) {
             startService(Intent(this, FloatingWindowService::class.java))
@@ -452,6 +489,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onStart() {
         super.onStart()
+        logLifecycle("onStart")
         stopService(Intent(this, FloatingWindowService::class.java))
     }
 }

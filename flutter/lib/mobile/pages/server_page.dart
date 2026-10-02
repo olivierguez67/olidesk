@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
+import '../../common/widgets/diag_log.dart';
 import '../../consts.dart';
 import '../../models/platform_model.dart';
 import '../../models/server_model.dart';
@@ -915,6 +916,13 @@ void androidChannelInit() {
             var value = arguments["value"] as String == "true";
             debugPrint("from jvm:on_state_changed,$name:$value");
             gFFI.serverModel.changeStatue(name, value);
+            break;
+          }
+        case "lifecycle_log":
+          {
+            var event = arguments["event"] as String;
+            var detail = (arguments["detail"] ?? '') as String;
+            logDiag('MainActivity.$event${detail.isEmpty ? "" : ": $detail"}');
             break;
           }
         case "on_android_permission_result":

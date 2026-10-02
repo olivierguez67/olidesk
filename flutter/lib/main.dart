@@ -26,6 +26,7 @@ import 'package:window_manager/window_manager.dart';
 import 'common.dart';
 import 'common/olidesk_deploy.dart';
 import 'common/widgets/app_lock.dart';
+import 'common/widgets/diag_log.dart';
 import 'common/widgets/olidesk_register_device.dart';
 import 'consts.dart';
 import 'mobile/pages/home_page.dart';
@@ -215,6 +216,10 @@ void runMainApp(bool startService) async {
 }
 
 void runMobileApp() async {
+  // A fresh entry here mid-session (i.e. not just at cold start) means the
+  // Dart isolate was torn down and restarted -- the clearest possible signal
+  // that the whole process got killed, not just backgrounded.
+  logDiag('runMobileApp() entered -- Dart isolate (re)started');
   await initEnv(kAppTypeMain);
   checkUpdate();
   if (isAndroid) androidChannelInit();
@@ -521,6 +526,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    logDiag('_AppState.didChangeAppLifecycleState: $state');
     AppLock.onLifecycleChanged(state);
   }
 

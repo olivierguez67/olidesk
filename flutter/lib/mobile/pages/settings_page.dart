@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_hbb/common/widgets/android_updater.dart';
 import 'package:flutter_hbb/common/widgets/app_lock.dart';
+import 'package:flutter_hbb/common/widgets/diag_log.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:get/get.dart';
@@ -692,6 +693,27 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             final log = await readAndroidUpdaterLog();
             await Clipboard.setData(ClipboardData(text: log));
             showToast('Diagnostics copied to clipboard');
+          },
+        ),
+      );
+      enhancementsTiles.add(
+        SettingsTile(
+          title: Text('Copy connection diagnostics'),
+          leading: Icon(Icons.bug_report_outlined),
+          onPressed: (context) async {
+            final log = await readDiagLog();
+            await Clipboard.setData(ClipboardData(text: log));
+            showToast('Diagnostics copied to clipboard');
+          },
+        ),
+      );
+      enhancementsTiles.add(
+        SettingsTile(
+          title: Text('Clear connection diagnostics'),
+          leading: Icon(Icons.delete_outline),
+          onPressed: (context) async {
+            await clearDiagLog();
+            showToast('Diagnostics cleared');
           },
         ),
       );

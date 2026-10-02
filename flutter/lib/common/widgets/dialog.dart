@@ -19,6 +19,7 @@ import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'address_book.dart';
+import 'diag_log.dart';
 
 void clientClose(SessionID sessionId, FFI ffi) async {
   if (allowAskForNoteAtEndOfConnection(ffi, true)) {
@@ -2279,21 +2280,25 @@ void enter2FaDialog(
   // in-progress connection during that exact window -- looked like the
   // connection restarting from scratch upon returning. Released on both
   // exits below (submit and cancel), not just one.
+  logDiag('enter2FaDialog: showing, requesting connecting wakelock');
   gFFI.invokeMethod('set_connecting_wakelock', true);
-  void releaseConnectingWakelock() {
+  void releaseConnectingWakelock(String reason) {
+    logDiag('enter2FaDialog: releasing connecting wakelock ($reason)');
     gFFI.invokeMethod('set_connecting_wakelock', false);
   }
 
   dialogManager.dismissAll();
   dialogManager.show((setState, close, context) {
     cancel() {
-      releaseConnectingWakelock();
+      logDiag('enter2FaDialog: cancel() -- user cancelled');
+      releaseConnectingWakelock('cancel');
       close();
       closeConnection();
     }
 
     submit() {
-      releaseConnectingWakelock();
+      logDiag('enter2FaDialog: submit() -- code entered');
+      releaseConnectingWakelock('submit');
       gFFI.send2FA(sessionId, controller.text.trim(), trustThisDevice.value);
       close();
       dialogManager.showLoading(translate('Logging in...'),

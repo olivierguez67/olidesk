@@ -17,6 +17,7 @@ import 'package:provider/provider.dart';
 import '../../common.dart';
 import '../../common/widgets/overlay.dart';
 import '../../common/widgets/dialog.dart';
+import '../../common/widgets/diag_log.dart';
 import '../../common/widgets/remote_input.dart';
 import '../../models/input_model.dart';
 import '../../models/model.dart';
@@ -90,6 +91,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    logDiag('RemotePage.initState: starting connection to ${widget.id}');
     gFFI.ffiModel.updateEventListener(sessionId, widget.id);
     gFFI.start(
       widget.id,
@@ -125,6 +127,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   Future<void> dispose() async {
+    // If this fires while the 2FA dialog is still up and nothing in this
+    // file's own logic (a Navigator pop, an explicit close()) explains it,
+    // whatever is above RemotePage in the widget tree tore it down --
+    // compare the timestamp against the Activity-lifecycle and AppLock log
+    // lines to see what triggered it.
+    logDiag('RemotePage.dispose: tearing down connection to ${widget.id}');
     WidgetsBinding.instance.removeObserver(this);
     // https://github.com/flutter/flutter/issues/64935
     super.dispose();
@@ -152,6 +160,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    logDiag('RemotePage.didChangeAppLifecycleState: $state');
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
     }

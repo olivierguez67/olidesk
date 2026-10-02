@@ -8,6 +8,7 @@ import 'package:local_auth/local_auth.dart';
 import '../../common.dart';
 import '../../consts.dart';
 import '../../models/platform_model.dart';
+import 'diag_log.dart';
 
 /// Optional app-level lock (biometric, or whatever device PIN/pattern/
 /// password the OS already has configured) gating the whole app -- client
@@ -57,16 +58,28 @@ class AppLock {
 
   /// Call from the root widget's didChangeAppLifecycleState.
   static void onLifecycleChanged(AppLifecycleState state) {
-    if (!enabled) return;
+    if (!enabled) {
+      logDiag('AppLock.onLifecycleChanged($state): disabled, ignoring');
+      return;
+    }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
       _backgroundedAt ??= DateTime.now();
+      logDiag('AppLock.onLifecycleChanged($state): backgroundedAt set');
     } else if (state == AppLifecycleState.resumed) {
       final bgAt = _backgroundedAt;
       _backgroundedAt = null;
-      if (bgAt == null) return;
+      if (bgAt == null) {
+        logDiag('AppLock.onLifecycleChanged(resumed): no backgroundedAt '
+            '(never saw paused/inactive)');
+        return;
+      }
       final away = DateTime.now().difference(bgAt);
-      if (away >= Duration(minutes: timeoutMinutes)) {
+      final willRelock = away >= Duration(minutes: timeoutMinutes);
+      logDiag('AppLock.onLifecycleChanged(resumed): away for '
+          '${away.inSeconds}s, timeout=${timeoutMinutes}m, '
+          'relocking=$willRelock');
+      if (willRelock) {
         unlocked.value = false;
       }
     }
