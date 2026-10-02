@@ -7,6 +7,7 @@ import 'package:local_auth/local_auth.dart';
 
 import '../../common.dart';
 import '../../consts.dart';
+import '../../models/platform_model.dart';
 
 /// Optional app-level lock (biometric, or whatever device PIN/pattern/
 /// password the OS already has configured) gating the whole app -- client
