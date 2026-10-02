@@ -832,8 +832,60 @@ jobs:
           tag_name: ${{ env.TAG_NAME }}
           files: olidesk-${{ env.VERSION }}-unsigned.tar.gz
 
+  # Fast fail-first check for the Android client: Dart analysis + a single
+  # debug/single-ABI Kotlin compile. Deliberately independent of
+  # generate-bridge -- ffi.kt is a committed source file, not a generated
+  # bridge artifact, so this doesn't need to wait on it. Exists because
+  # undefined-reference mistakes in new Dart/Kotlin code (missing import,
+  # a Kotlin property that stopped existing after a base-class change) were
+  # only being caught by the full ~90-minute, 3-ABI release matrix build
+  # below -- this catches the same class of error in a few minutes, without
+  # vcpkg/NDK/cargo, so the expensive matrix never starts on a build that
+  # can't compile.
+  lint-android:
+    name: lint (flutter analyze + android kotlin compile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
+
+      - name: Patch flutter
+        run: |
+          cd $(dirname $(dirname $(which flutter)))
+          [[ "3.24.5" == ${{env.ANDROID_FLUTTER_VERSION}} ]] && git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Flutter pub get
+        working-directory: ./flutter
+        run: flutter pub get
+
+      - name: Flutter analyze
+        working-directory: ./flutter
+        run: flutter analyze
+
+      - name: Compile Android Kotlin/Java sources
+        # No Rust .so is built/copied here -- Gradle doesn't need the native
+        # library to compile Dart/Kotlin/Java, only to produce a runnable
+        # APK, which isn't the point of this job. One ABI is enough: the
+        # errors this catches (undefined references, missing imports) are
+        # not ABI-specific.
+        working-directory: ./flutter
+        run: flutter build apk --debug --target-platform android-arm64
+
   build-rustdesk-android:
-    needs: [generate-bridge]
+    needs: [generate-bridge, lint-android]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     timeout-minutes: 90
