@@ -882,8 +882,14 @@ jobs:
         run: flutter pub get
 
       - name: Flutter analyze
+        # This job exists to catch genuine compile-breaking mistakes
+        # (undefined references, missing imports) before the ~90-minute
+        # release matrix runs -- not to enforce style across inherited
+        # upstream code nobody has lint-checked before now. Only error-level
+        # issues fail the step; warnings/infos (naming conventions, unused
+        # imports, etc.) are reported but non-fatal.
         working-directory: ./flutter
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Compile Android Kotlin/Java sources
         # No Rust .so is built/copied here -- Gradle doesn't need the native

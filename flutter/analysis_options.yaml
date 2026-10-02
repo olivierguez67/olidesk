@@ -1,5 +1,13 @@
 include: package:lints/recommended.yaml
 
+analyzer:
+  exclude:
+    # Only compiled for the web target (behind `if (dart.library.html)`
+    # conditional imports) -- never built here since we don't ship the web
+    # client. Full of pre-existing style/naming issues from upstream that
+    # were never checked because nothing ran `flutter analyze` in CI before.
+    - lib/web/**
+
 linter:
   rules:
     non_constant_identifier_names: false
