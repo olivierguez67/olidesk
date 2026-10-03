@@ -690,49 +690,85 @@ impl Client {
         log::info!("peer address: {}, timeout: {}", peer, connect_timeout);
         let start = std::time::Instant::now();
 
-        let mut connect_futures = Vec::new();
-        let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
-        connect_futures.push(
-            async move {
-                let conn = fut.await?;
-                Ok((conn, None, "TCP"))
+        let (mut conn, kcp, mut typ, mut direct);
+        if interface.is_force_relay() {
+            // Previously this unconditionally ran the direct attempt below
+            // and waited out its full timeout before ever checking
+            // is_force_relay() -- "always connect via relay" skipped
+            // nothing and the direct timeout still had to elapse every
+            // time. Go straight to relay instead, which is the entire
+            // point of the setting (per-peer toggle, global setting, and
+            // the "/r" id suffix all set the same force_relay flag).
+            if relay_server.is_empty() {
+                bail!("Always connect via relay is enabled, but no relay server is available for this peer");
             }
-            .boxed(),
-        );
-        if let Some(udp_socket_nat) = udp_socket_nat {
-            connect_futures.push(udp_nat_connect(udp_socket_nat, "UDP", connect_timeout).boxed());
-        }
-        if let Some(udp_socket_v6) = udp_socket_v6 {
-            connect_futures.push(udp_nat_connect(udp_socket_v6, "IPv6", connect_timeout).boxed());
-        }
-        // Run all connection attempts concurrently, return the first successful one
-        let (mut conn, kcp, mut typ) = match select_ok(connect_futures).await {
-            Ok(conn) => (Ok(conn.0 .0), conn.0 .1, conn.0 .2),
-            Err(e) => (Err(e), None, ""),
-        };
-
-        let mut direct = !conn.is_err();
-        if interface.is_force_relay() || conn.is_err() {
-            if !relay_server.is_empty() {
-                conn = Self::request_relay(
-                    peer_id,
-                    relay_server.to_owned(),
-                    rendezvous_server,
-                    !signed_id_pk.is_empty(),
-                    key,
-                    token,
-                    conn_type,
-                )
-                .await;
-                if let Err(e) = conn {
-                    // this direct is mainly used by on_establish_connection_error, so we update it here before bail
-                    interface.update_direct(Some(false));
-                    bail!("Failed to connect via relay server: {}", e);
+            conn = Self::request_relay(
+                peer_id,
+                relay_server.to_owned(),
+                rendezvous_server,
+                !signed_id_pk.is_empty(),
+                key,
+                token,
+                conn_type,
+            )
+            .await;
+            if let Err(e) = conn {
+                interface.update_direct(Some(false));
+                bail!("Failed to connect via relay server: {}", e);
+            }
+            kcp = None;
+            typ = "Relay";
+            direct = false;
+        } else {
+            let mut connect_futures = Vec::new();
+            let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
+            connect_futures.push(
+                async move {
+                    let conn = fut.await?;
+                    Ok((conn, None, "TCP"))
                 }
-                typ = "Relay";
-                direct = false;
-            } else {
-                bail!("Failed to make direct connection to remote desktop");
+                .boxed(),
+            );
+            if let Some(udp_socket_nat) = udp_socket_nat {
+                connect_futures
+                    .push(udp_nat_connect(udp_socket_nat, "UDP", connect_timeout).boxed());
+            }
+            if let Some(udp_socket_v6) = udp_socket_v6 {
+                connect_futures
+                    .push(udp_nat_connect(udp_socket_v6, "IPv6", connect_timeout).boxed());
+            }
+            // Run all connection attempts concurrently, return the first successful one
+            let (c, k, t) = match select_ok(connect_futures).await {
+                Ok(conn) => (Ok(conn.0 .0), conn.0 .1, conn.0 .2),
+                Err(e) => (Err(e), None, ""),
+            };
+            conn = c;
+            kcp = k;
+            typ = t;
+
+            direct = !conn.is_err();
+            if conn.is_err() {
+                if !relay_server.is_empty() {
+                    conn = Self::request_relay(
+                        peer_id,
+                        relay_server.to_owned(),
+                        rendezvous_server,
+                        !signed_id_pk.is_empty(),
+                        key,
+                        token,
+                        conn_type,
+                    )
+                    .await;
+                    if let Err(e) = conn {
+                        // this direct is mainly used by on_establish_connection_error, so we update it here before bail
+                        interface.update_direct(Some(false));
+                        bail!("Failed to connect via relay server: {}", e);
+                    }
+                    typ = "Relay";
+                    direct = false;
+                } else {
+                    bail!("Failed to make direct connection to remote desktop");
+                }
             }
         }
         let mut conn = conn?;
