@@ -691,6 +691,11 @@ impl Client {
         let start = std::time::Instant::now();
 
         let (mut conn, kcp, mut typ, mut direct);
+        log::info!(
+            "connect(): is_force_relay={}, relay_server={:?}",
+            interface.is_force_relay(),
+            relay_server
+        );
         if interface.is_force_relay() {
             // Previously this unconditionally ran the direct attempt below
             // and waited out its full timeout before ever checking
@@ -1902,6 +1907,16 @@ impl LoginConfigHandler {
                 || force_relay
                 || use_ws()
                 || Config::is_proxy();
+        log::info!(
+            "force_relay resolved to {} for {} (peer-option={:?}, global-option={:?}, id-suffix/caller={}, use_ws={}, is_proxy={})",
+            self.force_relay,
+            self.id,
+            self.get_option("force-always-relay"),
+            Config::get_option("force-always-relay"),
+            force_relay,
+            use_ws(),
+            Config::is_proxy(),
+        );
         if let Some((real_id, server, key)) = &self.other_server {
             let other_server_key = self.get_option("other-server-key");
             if !other_server_key.is_empty() && key.is_empty() {

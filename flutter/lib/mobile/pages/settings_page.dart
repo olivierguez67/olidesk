@@ -626,64 +626,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       );
     }
 
-    {
-      enhancementsTiles.add(
-        SettingsTile.switchTile(
-          initialValue: _forceAlwaysRelay,
-          title:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(translate('Always connect via relay')),
-            Text(
-                '* ${translate('always_relay_tip')}',
-                style: Theme.of(context).textTheme.bodySmall),
-          ]),
-          onToggle: (bool toValue) async {
-            await mainSetBoolOption(kOptionForceAlwaysRelay, toValue);
-            setState(() => _forceAlwaysRelay = toValue);
-          },
-        ),
-      );
-    }
-
-    {
-      enhancementsTiles.add(
-        SettingsTile.switchTile(
-          initialValue: _enableAppLock,
-          title:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(translate('Require biometric/PIN to open Olidesk')),
-            Text('* ${translate('app_lock_tip')}',
-                style: Theme.of(context).textTheme.bodySmall),
-          ]),
-          onToggle: (bool toValue) async {
-            await AppLock.setEnabled(toValue);
-            setState(() => _enableAppLock = toValue);
-          },
-        ),
-      );
-      if (_enableAppLock) {
-        enhancementsTiles.add(_getPopupDialogRadioEntry(
-          title: 'Re-lock after',
-          list: [
-            _RadioEntry('Immediately', '0'),
-            _RadioEntry('1 minute', '1'),
-            _RadioEntry('5 minutes', '5'),
-            _RadioEntry('15 minutes', '15'),
-            _RadioEntry('30 minutes', '30'),
-          ],
-          getter: () => bind
-              .mainGetLocalOption(key: kOptionAppLockTimeoutMinutes)
-              .isEmpty
-              ? kDefaultAppLockTimeoutMinutes.toString()
-              : bind.mainGetLocalOption(key: kOptionAppLockTimeoutMinutes),
-          asyncSetter: (value) async {
-            await bind.mainSetLocalOption(
-                key: kOptionAppLockTimeoutMinutes, value: value);
-          },
-        ));
-      }
-    }
-
     if (isAndroid) {
       enhancementsTiles.add(
         SettingsTile(
@@ -869,6 +811,59 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                         _allowInsecureTlsFallback = newValue;
                       });
                     },
+            ),
+          // Not gated by outgoingOnly like most of this section's
+          // Android-only tiles -- unlike those (which concern being
+          // controlled), always-relay and the app lock are purely about
+          // this device's own outgoing connections and its own security,
+          // so an outgoing-only build needs them just as much.
+          SettingsTile.switchTile(
+            initialValue: _forceAlwaysRelay,
+            title:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(translate('Always connect via relay')),
+              Text('* ${translate('always_relay_tip')}',
+                  style: Theme.of(context).textTheme.bodySmall),
+            ]),
+            onToggle: (bool toValue) async {
+              await mainSetBoolOption(kOptionForceAlwaysRelay, toValue);
+              setState(() => _forceAlwaysRelay = toValue);
+            },
+          ),
+          if (isAndroid)
+            SettingsTile.switchTile(
+              initialValue: _enableAppLock,
+              title: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(translate('Require biometric/PIN to open Olidesk')),
+                    Text('* ${translate('app_lock_tip')}',
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ]),
+              onToggle: (bool toValue) async {
+                await AppLock.setEnabled(toValue);
+                setState(() => _enableAppLock = toValue);
+              },
+            ),
+          if (isAndroid && _enableAppLock)
+            _getPopupDialogRadioEntry(
+              title: 'Re-lock after',
+              list: [
+                _RadioEntry('Immediately', '0'),
+                _RadioEntry('1 minute', '1'),
+                _RadioEntry('5 minutes', '5'),
+                _RadioEntry('15 minutes', '15'),
+                _RadioEntry('30 minutes', '30'),
+              ],
+              getter: () => bind
+                      .mainGetLocalOption(key: kOptionAppLockTimeoutMinutes)
+                      .isEmpty
+                  ? kDefaultAppLockTimeoutMinutes.toString()
+                  : bind.mainGetLocalOption(key: kOptionAppLockTimeoutMinutes),
+              asyncSetter: (value) async {
+                await bind.mainSetLocalOption(
+                    key: kOptionAppLockTimeoutMinutes, value: value);
+              },
             ),
           if (isAndroid && !outgoingOnly && !_isUsingPublicServer)
             SettingsTile.switchTile(
