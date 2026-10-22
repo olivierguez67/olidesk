@@ -116,6 +116,34 @@ typically covers a whole deployment batch (a site, a customer).
   enrollment code, and only that — it 401s an admin device token, and
   returns nothing but top-level group names.
 
+## 2FA reset
+
+Right-click a device in the address book → **Reset 2FA**. Only a registered
+admin device can do this; the break-glass `token` cannot. Every reset is
+written to `data/admin_auth.log` (`TFA_RESET_ISSUED`, with admin device,
+Olidesk ID and nonce), recorded in the `tfa_resets` table, and sent as a
+Telegram alert with no cooldown.
+
+The server signs each reset with `reset_signing_key` (an Ed25519 seed,
+base64) in `config.json`. Clients only accept resets signed by the matching
+public key, `TFA_RESET_PUB_KEY` in `src/auth_2fa.rs`. The client can't rely
+on TLS alone here, because its HTTP stack falls back to accepting invalid
+certificates. Without the key the endpoint returns 503. The key is a
+credential: anyone holding it can strip 2FA from every client. Rotating it
+means generating a new pair, updating both places and shipping a client
+release.
+
+Clients with 2FA enabled poll `/api/clients/2fa-reset/check` every 2
+minutes, and once at service start. On a valid reset the service clears its
+2FA secret and trusted devices immediately, with no restart needed. The
+client UI then reopens the onboarding wizard at the 2FA step, showing a new
+QR code. The client acks on its following poll, and the ack is logged as
+`TFA_RESET_APPLIED`. The ack is unauthenticated, so read it as "reported
+applied", not proof. An unapplied reset stops being offered after 7 days.
+
+Deploying it needs `PyNaCl` (now in `requirements.txt`), so rebuild with
+`docker compose up -d --build`, not a plain restart.
+
 ## Installing the client
 
 The client MSI (`olidesk-client-*.msi`, built by

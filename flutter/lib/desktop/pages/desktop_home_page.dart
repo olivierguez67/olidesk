@@ -9,6 +9,8 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
 import 'package:flutter_hbb/common/widgets/custom_password.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/common/widgets/olidesk_register_device.dart'
+    show maybeOpenOlideskOnboardingWindow;
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
@@ -56,6 +58,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   final RxBool _block = false.obs;
   bool _clientPwdSet = false;
   bool _clientTwoFaSet = false;
+  // Client build: last seen 2FA state, to catch an admin reset while running.
+  bool? _olideskTwoFaSet;
 
   final GlobalKey _childKey = GlobalKey();
 
@@ -842,6 +846,16 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           _clientTwoFaSet = twoFaSet;
           setState(() {});
         }
+      }
+      if (kOlideskClientBuild) {
+        // 2FA going from set to unset while running means an admin reset it
+        // (src/auth_2fa.rs); reopen the wizard for a new QR code. Launch-time
+        // resets are handled by main.dart's own call.
+        final twoFaSet = bind.mainHasValid2FaSync();
+        if (_olideskTwoFaSet == true && !twoFaSet) {
+          unawaited(maybeOpenOlideskOnboardingWindow());
+        }
+        _olideskTwoFaSet = twoFaSet;
       }
       if (watchIsCanScreenRecording) {
         if (bind.mainIsCanScreenRecording(prompt: false)) {

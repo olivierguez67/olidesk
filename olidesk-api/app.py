@@ -5,10 +5,12 @@ import sqlite3
 import logging
 import hashlib
 import secrets
+import base64
 from functools import wraps
 from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, jsonify, g
+from nacl.signing import SigningKey
 
 # ---------------------------------------------------------------------------
 # Config
@@ -19,13 +21,24 @@ with open(CONFIG_PATH) as _f:
     _CONFIG = json.load(_f)
 
 # Break-glass recovery credential only — see require_admin_devices_auth.
-# Address-book access (groups/clients) is per-device now; this token cannot
-# reach it. Keep it secret and treat rotating it as a real incident response
+# It works on /api/admin/devices and nothing else: not the address book,
+# enrollment codes, 2FA resets or the alert test. Keep it secret and treat rotating it as a real incident response
 # action, since anyone with it can mint new admin devices.
 TOKEN = _CONFIG["token"]
 DB_PATH = _CONFIG.get("db_path", "/data/address_book.sqlite")
 HOST = _CONFIG.get("host", "0.0.0.0")
 PORT = int(_CONFIG.get("port", 8443))
+
+# Ed25519 seed (base64, 32 bytes) that signs 2FA resets -- see
+# reset_client_2fa. The client only honours a reset whose signature checks
+# out against the matching public key compiled into it (TFA_RESET_PUB_KEY in
+# src/auth_2fa.rs), because its HTTP stack falls back to accepting invalid
+# TLS certificates and so can't trust the transport alone. Optional: without
+# it the reset endpoint refuses to run instead of the whole app failing.
+RESET_SIGNING_KEY = _CONFIG.get("reset_signing_key")
+# How long an unapplied reset stays on offer to its client. The client
+# enforces the same limit against its own clock (TFA_RESET_MAX_AGE_SECS).
+TFA_RESET_TTL = timedelta(days=7)
 
 MAX_ADMIN_DEVICES = 4
 REGISTER_RATE_LIMIT = 20
@@ -143,6 +156,22 @@ CREATE TABLE IF NOT EXISTS enrollment_codes (
     last_used_at TEXT,
     use_count    INTEGER NOT NULL DEFAULT 0
 );
+
+-- Admin-issued 2FA resets (see reset_client_2fa). Doubles as the audit
+-- trail: who issued each one, for which machine, when, and when (if ever)
+-- the client reported applying it. signed is the exact base64 blob handed
+-- to the client -- signature followed by the JSON payload it covers.
+CREATE TABLE IF NOT EXISTS tfa_resets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    olidesk_id  TEXT    NOT NULL,
+    nonce       TEXT    NOT NULL UNIQUE,
+    signed      TEXT    NOT NULL,
+    issued_at   TEXT    NOT NULL,
+    issued_by   TEXT    NOT NULL,
+    issued_ip   TEXT,
+    applied_at  TEXT,
+    applied_ip  TEXT
+);
 """
 
 
@@ -227,10 +256,10 @@ def _current_actor_name() -> str:
     return device["name"] if device is not None else "break-glass"
 
 
-def require_ab_auth(f):
-    """Address-book endpoints (groups/clients): a valid per-device token
-    only. The break-glass TOKEN deliberately does not work here — see
-    require_admin_devices_auth for where it does."""
+def require_device_auth(f):
+    """Every admin endpoint except /api/admin/devices: a valid per-device
+    token only. The break-glass TOKEN deliberately does not work here — see
+    require_admin_devices_auth for the one place it does."""
     @wraps(f)
     def decorated(*args, **kwargs):
         token = _bearer_token()
@@ -252,14 +281,16 @@ def require_ab_auth(f):
 
 
 def require_admin_devices_auth(f):
-    """/api/admin/devices endpoints: a valid per-device token, OR the
+    """/api/admin/devices endpoints only: a valid per-device token, OR the
     break-glass config token — needed to bootstrap the very first device on
-    a fresh server, and to recover if every device token is lost."""
+    a fresh server, and to recover if every device token is lost. Don't put
+    anything else behind this; break-glass should be able to do as little
+    as possible."""
     @wraps(f)
     def decorated(*args, **kwargs):
         db = get_db()
         token = _bearer_token()
-        if token and TOKEN and token == TOKEN:
+        if token and TOKEN and secrets.compare_digest(token, TOKEN):
             _log_admin_auth(db, True, "break-glass", request.path)
             g.admin_device = None
             return f(*args, **kwargs)
@@ -378,7 +409,7 @@ def _get_or_create_top_level_group(db, name):
 # ---------------------------------------------------------------------------
 
 @app.route("/api/groups", methods=["GET"])
-@require_ab_auth
+@require_device_auth
 def get_groups():
     db = get_db()
     rows = db.execute("SELECT id, name, parent_id, icon, sort_order FROM groups").fetchall()
@@ -386,7 +417,7 @@ def get_groups():
 
 
 @app.route("/api/groups", methods=["POST"])
-@require_ab_auth
+@require_device_auth
 def create_group():
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
@@ -412,7 +443,7 @@ def create_group():
 
 
 @app.route("/api/groups/<int:group_id>", methods=["PUT"])
-@require_ab_auth
+@require_device_auth
 def update_group(group_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone():
@@ -454,7 +485,7 @@ def update_group(group_id):
 
 
 @app.route("/api/groups/<int:group_id>", methods=["DELETE"])
-@require_ab_auth
+@require_device_auth
 def delete_group(group_id):
     db = get_db()
     row = db.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
@@ -483,7 +514,7 @@ _CLIENT_SELECT = """
 
 
 @app.route("/api/clients", methods=["GET"])
-@require_ab_auth
+@require_device_auth
 def get_clients():
     db = get_db()
     group_id = request.args.get("group_id")
@@ -504,7 +535,7 @@ def get_clients():
 
 
 @app.route("/api/clients", methods=["POST"])
-@require_ab_auth
+@require_device_auth
 def create_client():
     data = request.get_json(silent=True) or {}
     olidesk_id = (data.get("olidesk_id") or "").strip()
@@ -538,7 +569,7 @@ def create_client():
 
 
 @app.route("/api/clients/<int:client_id>", methods=["PUT"])
-@require_ab_auth
+@require_device_auth
 def update_client(client_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM clients WHERE id = ?", (client_id,)).fetchone():
@@ -575,7 +606,7 @@ def update_client(client_id):
 
 
 @app.route("/api/clients/<int:client_id>", methods=["DELETE"])
-@require_ab_auth
+@require_device_auth
 def delete_client(client_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM clients WHERE id = ?", (client_id,)).fetchone():
@@ -586,7 +617,7 @@ def delete_client(client_id):
 
 
 @app.route("/api/clients/<int:client_id>/move", methods=["POST"])
-@require_ab_auth
+@require_device_auth
 def move_client(client_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM clients WHERE id = ?", (client_id,)).fetchone():
@@ -721,6 +752,99 @@ def register_client():
     return jsonify(dict(row)), status
 
 
+# ---------------------------------------------------------------------------
+# 2FA reset
+# ---------------------------------------------------------------------------
+
+@app.route("/api/clients/<int:client_id>/reset-2fa", methods=["POST"])
+@require_device_auth
+def reset_client_2fa(client_id):
+    """Queues a signed "clear your 2FA" for one client, picked up by its
+    service's poll (see check_2fa_reset). require_device_auth, not
+    require_admin_devices_auth: only a registered admin device may do this,
+    never the break-glass token. Logged and alerted unconditionally -- no
+    alert cooldown, since every reset weakens a security control."""
+    if not RESET_SIGNING_KEY:
+        return jsonify({"error": "2FA reset is not configured "
+                                  "(config.json missing reset_signing_key)"}), 503
+    db = get_db()
+    client = db.execute(
+        "SELECT olidesk_id, name FROM clients WHERE id = ?", (client_id,)
+    ).fetchone()
+    if not client:
+        return jsonify({"error": "Not found"}), 404
+    olidesk_id = client["olidesk_id"]
+
+    now = datetime.now(timezone.utc)
+    nonce = secrets.token_hex(16)
+    payload = json.dumps(
+        {"olidesk_id": olidesk_id, "nonce": nonce, "issued_ts": int(now.timestamp())},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    signing_key = SigningKey(base64.b64decode(RESET_SIGNING_KEY))
+    signed = base64.b64encode(bytes(signing_key.sign(payload))).decode("ascii")
+
+    actor = _current_actor_name()
+    db.execute(
+        """INSERT INTO tfa_resets (olidesk_id, nonce, signed, issued_at, issued_by, issued_ip)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (olidesk_id, nonce, signed, now.isoformat(), actor, _client_ip()),
+    )
+    db.commit()
+    admin_auth_log.info(
+        "TFA_RESET_ISSUED ip=%s by=%s olidesk_id=%s name=%s nonce=%s",
+        _client_ip(), actor, olidesk_id, client["name"], nonce,
+    )
+    alert_sent = alerts.alert_2fa_reset(actor, olidesk_id, client["name"], _client_ip())
+    return jsonify({"olidesk_id": olidesk_id, "issued_at": now.isoformat(),
+                    "alert_sent": alert_sent}), 201
+
+
+@app.route("/api/clients/2fa-reset/check", methods=["POST"])
+def check_2fa_reset():
+    """Polled by every client with 2FA enabled (TFA_RESET_POLL_INTERVAL in
+    src/auth_2fa.rs). Unauthenticated on purpose -- clients hold no
+    credential after registration -- which is safe because all it ever hands
+    out is a reset already signed for that one olidesk_id. Knowing a
+    machine's ID gets you nothing you can apply anywhere else."""
+    data = request.get_json(silent=True) or {}
+    olidesk_id = (data.get("olidesk_id") or "").strip()
+    if not olidesk_id:
+        return jsonify({"error": "olidesk_id is required"}), 400
+    window_start = (datetime.now(timezone.utc) - TFA_RESET_TTL).isoformat()
+    row = get_db().execute(
+        "SELECT signed FROM tfa_resets WHERE olidesk_id = ? AND applied_at IS NULL "
+        "AND issued_at > ? ORDER BY issued_at DESC LIMIT 1",
+        (olidesk_id, window_start),
+    ).fetchone()
+    return jsonify({"signed": row["signed"] if row else None})
+
+
+@app.route("/api/clients/2fa-reset/ack", methods=["POST"])
+def ack_2fa_reset():
+    """The client reporting it applied a reset. Unauthenticated like
+    check_2fa_reset, so treat applied_at as "a caller holding that nonce
+    said so", not proof -- anyone who polled check_2fa_reset for the ID
+    could send it. A false ack only stops the reset being offered."""
+    data = request.get_json(silent=True) or {}
+    olidesk_id = (data.get("olidesk_id") or "").strip()
+    nonce = (data.get("nonce") or "").strip()
+    if not olidesk_id or not nonce:
+        return jsonify({"error": "olidesk_id and nonce are required"}), 400
+    db = get_db()
+    cur = db.execute(
+        "UPDATE tfa_resets SET applied_at = ?, applied_ip = ? "
+        "WHERE olidesk_id = ? AND nonce = ? AND applied_at IS NULL",
+        (datetime.now(timezone.utc).isoformat(), _client_ip(), olidesk_id, nonce),
+    )
+    db.commit()
+    if cur.rowcount:
+        admin_auth_log.info(
+            "TFA_RESET_APPLIED ip=%s olidesk_id=%s nonce=%s", _client_ip(), olidesk_id, nonce
+        )
+    return jsonify({"acked": bool(cur.rowcount)})
+
+
 @app.route("/api/deploy/groups", methods=["GET"])
 @require_enroll_auth
 def list_deploy_groups():
@@ -731,7 +855,7 @@ def list_deploy_groups():
     enumerate clients, IDs, or the group tree.
 
     /api/groups (the admin endpoint) 401s for an enrollment code now that
-    address-book access is per-device (require_ab_auth); this is the
+    address-book access is per-device (require_device_auth); this is the
     enrollment-code-scoped equivalent for exactly the one thing a
     registering client needs."""
     db = get_db()
@@ -758,7 +882,7 @@ def _enrollment_code_public(row) -> dict:
 
 
 @app.route("/api/admin/enrollment-codes", methods=["GET"])
-@require_admin_devices_auth
+@require_device_auth
 def list_enrollment_codes():
     db = get_db()
     rows = db.execute(_ENROLLMENT_CODE_SELECT + " ORDER BY created_at DESC").fetchall()
@@ -766,7 +890,7 @@ def list_enrollment_codes():
 
 
 @app.route("/api/admin/enrollment-codes", methods=["POST"])
-@require_admin_devices_auth
+@require_device_auth
 def create_enrollment_code():
     db = get_db()
     now = datetime.now(timezone.utc)
@@ -792,7 +916,7 @@ def create_enrollment_code():
 
 
 @app.route("/api/admin/enrollment-codes/<int:code_id>", methods=["DELETE"])
-@require_admin_devices_auth
+@require_device_auth
 def revoke_enrollment_code(code_id):
     db = get_db()
     row = db.execute("SELECT * FROM enrollment_codes WHERE id = ?", (code_id,)).fetchone()
@@ -881,15 +1005,14 @@ def delete_admin_device(device_id):
 # ---------------------------------------------------------------------------
 
 @app.route("/api/admin/alerts/test", methods=["POST"])
-@require_admin_devices_auth
+@require_device_auth
 def test_alert():
     """Sends one Telegram message through the exact same code path as a
     real alert, so verifying the setup doesn't depend on actually
     triggering one of the real conditions. Does not go through
     alerts._should_send -- a deliberate test send should never be
     suppressed by the cooldown that's protecting against a real incident.
-    See ROLLBACK.md-adjacent ops docs / the server setup notes for how to
-    call this."""
+    Needs an admin device token; the break-glass token is refused."""
     if not alerts.alerts_enabled():
         return jsonify({"error": "Alerting is not configured (alerts.json missing "
                                   "bot_token/chat_id)"}), 400

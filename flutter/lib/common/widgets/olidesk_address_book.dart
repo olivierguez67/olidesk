@@ -469,6 +469,23 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
     await _fetchClients(groupId: _selectedGroupId.value);
   }
 
+  // Returns whether the server's Telegram alert for the reset went out.
+  Future<bool> _apiResetClient2fa(int id) async {
+    final resp = await http_svc
+        .post(Uri.parse('$_apiUrl/api/clients/$id/reset-2fa'),
+            headers: _headers)
+        .timeout(const Duration(seconds: 10),
+            onTimeout: () =>
+                throw TimeoutException('Request timed out after 10 s'));
+    if (resp.statusCode == 503) {
+      throw Exception('2FA reset is not configured on the server '
+          '(config.json needs reset_signing_key)');
+    }
+    _handleStatus(resp.statusCode);
+    return (jsonDecode(resp.body) as Map<String, dynamic>)['alert_sent'] ==
+        true;
+  }
+
   void _handleStatus(int code) {
     if (code == 401) throw Exception('Unauthorized — check API token');
     if (code == 403) throw Exception('Forbidden');
@@ -1140,6 +1157,10 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
           value: 'move',
           child: _menuItem(Icons.drive_file_move_outlined, 'Move to Group'),
         ),
+        PopupMenuItem(
+          value: 'reset2fa',
+          child: _menuItem(Icons.lock_reset, 'Reset 2FA'),
+        ),
         const PopupMenuDivider(height: 4),
         PopupMenuItem(
           value: 'delete',
@@ -1159,6 +1180,9 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
           break;
         case 'move':
           _showMoveDialog(context, client);
+          break;
+        case 'reset2fa':
+          _confirmReset2fa(context, client);
           break;
         case 'delete':
           _confirmDelete(context, client);
@@ -1202,6 +1226,50 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
               }
             },
             child: Text(translate('Delete')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // The server signs the reset and the client's service picks it up on its
+  // next poll (a couple of minutes if online, else at next service start) --
+  // see reset_client_2fa in olidesk-api/app.py and src/auth_2fa.rs.
+  void _confirmReset2fa(BuildContext context, _AbClient client) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset 2FA'),
+        content: Text(
+            'Reset two-factor authentication on "${client.name}" '
+            '(${client.olideskId})?\n\n'
+            'Within a few minutes, if it is online, the machine drops its 2FA '
+            'secret and trusted devices. Until 2FA is set up again it is '
+            'protected by its password only. Its setup window then reopens '
+            'on its screen with a new QR code.\n\n'
+            'This is logged with this admin device\'s name and sent as a '
+            'Telegram alert.'),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(translate('Cancel')),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                final alertSent = await _apiResetClient2fa(client.id);
+                showToast(alertSent
+                    ? '2FA reset queued for ${client.name}'
+                    : '2FA reset queued for ${client.name} '
+                        '(Telegram alert failed to send)');
+              } catch (e) {
+                _error.value = _friendlyError(e);
+              }
+            },
+            child: const Text('Reset 2FA'),
           ),
         ],
       ),

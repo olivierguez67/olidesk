@@ -43,7 +43,14 @@ const _kNewGroupSentinel = '__add_new_group__';
 
 Future<void> maybeOpenOlideskOnboardingWindow() async {
   if (bind.mainGetLocalOption(key: kOlideskOnboardedOptionKey) == 'Y') {
-    return;
+    // Onboarded but without 2FA means an admin reset it from the address
+    // book (start_reset_poll in src/auth_2fa.rs): reopen straight at the 2FA
+    // step for a new QR code. Checked twice because right after launch the
+    // UI's option cache may not have synced from the service yet, which
+    // reads the same as "no 2FA".
+    if (bind.mainHasValid2FaSync()) return;
+    await Future.delayed(const Duration(seconds: 5));
+    if (bind.mainHasValid2FaSync()) return;
   }
   await rustDeskWinManager.newOnboardingWindow();
 }
@@ -121,7 +128,15 @@ class _OlideskOnboardingWindowState extends State<OlideskOnboardingWindow> {
     super.initState();
     final alreadyRegistered =
         bind.mainGetLocalOption(key: kOlideskRegisteredOptionKey) == 'Y';
-    _step = alreadyRegistered ? _Step.password : _Step.register;
+    // Already onboarded means this is a 2FA re-setup after an admin reset
+    // (see maybeOpenOlideskOnboardingWindow); the rest is still in place.
+    final alreadyOnboarded =
+        bind.mainGetLocalOption(key: kOlideskOnboardedOptionKey) == 'Y';
+    _step = alreadyOnboarded
+        ? _Step.twoFa
+        : alreadyRegistered
+            ? _Step.password
+            : _Step.register;
     _deviceNameCtrl = TextEditingController(text: olideskHostname());
     unawaited(_prefillDeviceName());
   }

@@ -2,5 +2,6 @@
   "token": "CHANGE_ME",
   "host": "0.0.0.0",
   "port": 8443,
-  "db_path": "/data/address_book.sqlite"
+  "db_path": "/data/address_book.sqlite",
+  "reset_signing_key": "BASE64_ED25519_SEED -- see DEPLOYMENT.md, 2FA reset"
 }

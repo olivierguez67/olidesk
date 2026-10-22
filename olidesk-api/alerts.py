@@ -181,6 +181,20 @@ def check_enrollment_failure(db, ip: str):
         )
 
 
+def alert_2fa_reset(actor: str, olidesk_id: str, client_name, ip: str) -> bool:
+    """Call this for every 2FA reset an admin issues -- see
+    reset_client_2fa in app.py. Deliberately bypasses _should_send: each
+    reset disables a security control on a machine, so none may be
+    swallowed by a cooldown. Returns whether the message went out, so the
+    admin app can say so if it didn't."""
+    return send_telegram_message(
+        f"\U0001f513 Olidesk: 2FA reset issued for {client_name or '(unnamed)'} "
+        f"(ID {olidesk_id}) by admin device \"{actor}\" from {ip}. "
+        f"The machine drops its 2FA on its next check-in (within a few minutes "
+        f"if online). If you did not do this, revoke that admin device now."
+    )
+
+
 def alert_new_device(db, olidesk_id: str, hostname, group_name, ip: str):
     """Call this only for a genuinely new registration (HTTP 201, not a
     re-registration of an existing client) -- see register_client in
