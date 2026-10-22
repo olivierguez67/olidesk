@@ -489,6 +489,15 @@ class _GeneralState extends State<_General> {
             kOptionEnableConfirmClosingTabs,
             isServer: false),
       _OptionCheckBox(context, 'Adaptive bitrate', kOptionEnableAbr),
+      // Here rather than in Network: every Olidesk build sets the built-in
+      // hide-network-settings (init_olidesk_defaults in src/common.rs), so
+      // the Network tab never shows and a toggle there can't be reached.
+      if (!bind.isIncomingOnly())
+        Tooltip(
+          message: translate('always_relay_tip'),
+          child: _OptionCheckBox(
+              context, 'Always connect via relay', kOptionForceAlwaysRelay),
+        ),
       if (!isWeb) wallpaper(),
       if (!isWeb && !bind.isIncomingOnly()) ...[
         _OptionCheckBox(
@@ -1725,17 +1734,6 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                     }
                   },
                 ),
-              // Deliberately outside the isUsingPublicServer futureBuilder
-              // above -- always-relay is a client connection-behavior
-              // preference, unrelated to which ID/relay server is in use,
-              // so it shouldn't disappear just because this device is on
-              // the public server.
-              divider,
-              switchWidget(
-                  Icons.sync,
-                  'Always connect via relay',
-                  'always_relay_tip',
-                  kOptionForceAlwaysRelay),
             ],
           ),
         ),
