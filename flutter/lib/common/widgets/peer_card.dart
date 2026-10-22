@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 
 import '../../common.dart';
 import '../../common/formatter/id_formatter.dart';
+import '../../common/olidesk_ab_names.dart';
 import '../../models/peer_model.dart';
 import '../../models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
@@ -387,11 +388,12 @@ class _PeerCardState extends State<_PeerCard>
                           child: FittedBox(
                             fit: BoxFit.scaleDown,
                             alignment: Alignment.centerLeft,
-                            child: Text(
-                              getPeerLabel(peer),
-                              maxLines: 1,
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
+                            child: Obx(() => Text(
+                                  getPeerLabel(peer),
+                                  maxLines: 1,
+                                  style:
+                                      Theme.of(context).textTheme.titleSmall,
+                                )),
                           ),
                         ),
                       ]).paddingSymmetric(vertical: 8)),
@@ -1486,9 +1488,12 @@ void _rdpDialog(String id) async {
   });
 }
 
-// The name to lead a peer card with: an alias if one was set, otherwise the
-// machine's hostname. Falls back to the id for peers we have no info for yet.
+// The name to lead a peer card with: the Olidesk address-book name if the
+// machine is in it, then an alias if one was set, otherwise the machine's
+// hostname. Falls back to the id for peers we have no info for yet.
 String getPeerLabel(Peer peer) {
+  final abName = olideskAbName(peer.id);
+  if (abName != null) return abName;
   if (peer.alias.isNotEmpty) return peer.alias;
   if (peer.hostname.isNotEmpty) return peer.hostname;
   return formatID(peer.id);
@@ -1497,6 +1502,11 @@ String getPeerLabel(Peer peer) {
 // Peer name followed by its dimmed id, so a card is readable at a glance
 // without losing the id needed to identify or dictate a peer.
 Widget getPeerLabelWithId(BuildContext context, Peer peer) {
+  // Obx so the card picks up address-book names that arrive after it built.
+  return Obx(() => _peerLabelWithId(context, peer));
+}
+
+Widget _peerLabelWithId(BuildContext context, Peer peer) {
   final label = getPeerLabel(peer);
   final id = formatID(peer.id);
   final idStyle = Theme.of(context).textTheme.bodySmall;

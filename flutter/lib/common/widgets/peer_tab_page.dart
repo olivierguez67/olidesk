@@ -80,6 +80,8 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   _PeerTabPageState() {
     _loadLocalOptions();
+    // Dead-code eliminated from the client build, like the address book tab.
+    if (!kOlideskClientBuild) refreshOlideskAbNames();
   }
 
   void _loadLocalOptions() {

@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 
 import '../../common.dart';
 import '../../models/platform_model.dart';
+import '../olidesk_ab_names.dart';
 import '../../utils/http_service.dart' as http_svc;
 import 'olidesk_admin_devices.dart' show showOlideskAdminDevicesDialog;
 import 'olidesk_enrollment_codes.dart' show showOlideskEnrollmentCodesDialog;
@@ -35,6 +36,31 @@ const _kLegacyApiUrls = [
 // view and a peers view can listen for the same callback at once.
 const _kCbQueryOnlines = 'callback_query_onlines';
 const _kOnlineHandlerName = 'olidesk-address-book';
+
+/// Fetches the full client list just for its names (see olidesk_ab_names.dart),
+/// so Recent connections etc. show address-book names without the address
+/// book tab having been opened. Best effort: a failure keeps the cached names.
+Future<void> refreshOlideskAbNames() async {
+  final token = bind.mainGetLocalOption(key: _kTokenKey);
+  if (token.isEmpty) return;
+  final stored = bind.mainGetLocalOption(key: _kApiUrlKey);
+  final apiUrl = stored.isEmpty || _kLegacyApiUrls.contains(stored)
+      ? _kDefaultApiUrl
+      : stored;
+  try {
+    final resp = await http_svc.get(Uri.parse('$apiUrl/api/clients'), headers: {
+      'Authorization': 'Bearer $token'
+    }).timeout(const Duration(seconds: 10));
+    if (resp.statusCode != 200) return;
+    final data = jsonDecode(resp.body) as List;
+    setOlideskAbNames({
+      for (final c in data.cast<Map<String, dynamic>>())
+        (c['olidesk_id'] as String? ?? ''): (c['name'] as String? ?? ''),
+    }, complete: true);
+  } catch (e) {
+    debugPrint('refreshOlideskAbNames failed: $e');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Data models
@@ -402,6 +428,8 @@ class _OlideskAddressBookState extends State<OlideskAddressBook> {
       _clients.value = data
           .map((c) => _AbClient.fromJson(c as Map<String, dynamic>))
           .toList();
+      setOlideskAbNames({for (final c in _clients) c.olideskId: c.name},
+          complete: groupId == null);
       // Ask about the ids we just learned about rather than waiting for the
       // next tick, so a freshly loaded list is not briefly all-offline.
       _queryOnlines();
