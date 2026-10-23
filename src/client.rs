@@ -1868,7 +1868,12 @@ impl LoginConfigHandler {
 
         self.id = id;
         self.conn_type = conn_type;
-        let config = self.load_config();
+        let mut config = self.load_config();
+        // Lock-after-session-end is per session: always start from the global default
+        // (Settings > Other default options), not whatever a previous session's toolbar
+        // toggle saved into this peer's config. Reconnects don't come through here, so an
+        // override still holds for the whole session.
+        config.lock_after_session_end = Default::default();
         self.remember = !config.password.is_empty();
         self.config = config;
 

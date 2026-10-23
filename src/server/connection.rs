@@ -1051,7 +1051,9 @@ impl Connection {
                                 }
                             }
                             Err(err) =>  {
-                                conn.on_close(&err.to_string(), false).await;
+                                // Lock: a failed send to the peer is how a dropped connection
+                                // usually surfaces, same as the read error / timeout paths.
+                                conn.on_close(&err.to_string(), true).await;
                                 break;
                             }
                         }
@@ -1073,7 +1075,9 @@ impl Connection {
                         }
                     }
                     if let Err(err) = conn.stream.send(&value as &Message).await {
-                        conn.on_close(&err.to_string(), false).await;
+                        // Lock: with video streaming, a dropped connection most often shows
+                        // up first as this failed send.
+                        conn.on_close(&err.to_string(), true).await;
                         break;
                     }
                 },
@@ -1123,7 +1127,7 @@ impl Connection {
                             #[cfg(not(target_os = "ios"))]
                             if let Some(msg_out) = crate::clipboard::get_msg_if_not_support_multi_clip(&conn.lr.version, &conn.lr.my_platform, _multi_clipboards) {
                                 if let Err(err) = conn.stream.send(&msg_out).await {
-                                    conn.on_close(&err.to_string(), false).await;
+                                    conn.on_close(&err.to_string(), true).await;
                                     break;
                                 }
                                 continue;
@@ -1134,7 +1138,7 @@ impl Connection {
 
                     let msg: &Message = &msg;
                     if let Err(err) = conn.stream.send(msg).await {
-                        conn.on_close(&err.to_string(), false).await;
+                        conn.on_close(&err.to_string(), true).await;
                         break;
                     }
                 },
