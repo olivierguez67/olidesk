@@ -2152,7 +2152,16 @@ fn apply_client_build_settings() {
     hard.insert("hide-server-settings".to_owned(), "Y".to_owned());
     hard.insert("hide-network-settings".to_owned(), "Y".to_owned());
     hard.insert("hide-security-settings".to_owned(), "Y".to_owned());
-    hard.insert("verification-method".to_owned(), "use-permanent-password".to_owned());
+    // No "verification-method" here: password checks read it through
+    // `Config::get_option` (OVERWRITE_SETTINGS, then the saved option), never
+    // HARD_SETTINGS, so an entry here has no effect. Actual behavior:
+    // - Desktop: the onboarding wizard's password step saves
+    //   "use-permanent-password" as a normal option. Until that step is done
+    //   the default (both passwords) applies, so the one-time password works.
+    // - Android: the client build has no way to set a permanent password
+    //   (settings are disabled), so it relies on the one-time password.
+    // Forcing permanent-only here (via OVERWRITE_SETTINGS) would make fresh
+    // desktop installs and every Android client unreachable remotely.
 }
 
 pub fn load_custom_client() {
